@@ -6,6 +6,22 @@ import numpy as np
 from openai import OpenAI
 import tempfile
 import os
+from fastapi.middleware.cors import CORSMiddleware
+
+# ... existing code ...
+
+app = FastAPI()
+
+# Add CORS middleware to allow requests from Hostinger
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # In production, replace "*" with your Hostinger domain
+    allow_credentials=True,
+    allow_methods=["*"],  # Allows all methods
+    allow_headers=["*"],  # Allows all headers
+)
+
+# ... rest of your code ...
 
 # Initialize App and AI
 app = FastAPI()
