@@ -7,11 +7,15 @@ from openai import OpenAI
 import tempfile
 import os
 
-# 🔑 PASTE YOUR OPENAI API KEY HERE
-API_KEY = "YOUR_OPENAI_API_KEY"
-
 # Initialize App and AI
 app = FastAPI()
+
+# Read the API key from Render's Environment Variables
+API_KEY = os.environ.get("OPENAI_API_KEY")
+
+if not API_KEY:
+    raise Exception("OPENAI_API_KEY environment variable not set!")
+
 client = OpenAI(api_key=API_KEY)
 
 @app.post("/analyze-match")
