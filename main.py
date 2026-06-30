@@ -24,7 +24,7 @@ app.add_middleware(
 # ... rest of your code ...
 
 # Initialize App and AI
-app = FastAPI()
+
 
 # Read the API key from Render's Environment Variables
 API_KEY = os.environ.get("OPENAI_API_KEY")
