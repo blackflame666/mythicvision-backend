@@ -2,6 +2,7 @@ import os
 from fastapi import FastAPI, Request, HTTPException, Depends
 from fastapi.responses import RedirectResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.sessions import SessionMiddleware
 from authlib.integrations.starlette_client import OAuth
 from jose import jwt, JWTError
 from datetime import datetime, timedelta
@@ -49,6 +50,7 @@ API_URL = os.getenv("API_URL", "https://mythicvision-backend.onrender.com")
 SECRET_KEY = os.getenv("SECRET_KEY", "super-secret-key-change-this-in-production")
 ALGORITHM = "HS256"
 
+# CORS Middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[FRONTEND_URL, "http://localhost:3000", "http://localhost:8000"],
@@ -56,6 +58,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Session Middleware (REQUIRED for OAuth)
+app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY)
 
 # --- GOOGLE OAUTH SETUP ---
 oauth = OAuth()
@@ -114,8 +119,6 @@ def root():
 async def google_login(request: Request):
     """Step 1: Redirect user to Google for authentication"""
     redirect_uri = request.url_for('google_callback')
-    # If running locally, you might need to override this to your production callback URL
-    # redirect_uri = f"{API_URL}/auth/google/callback"
     return await oauth.google.authorize_redirect(request, redirect_uri)
 
 @app.get("/auth/google/callback")
@@ -150,7 +153,6 @@ async def google_callback(request: Request, db: Session = Depends(get_db)):
         access_token = create_access_token(data=token_data)
 
         # Redirect back to Frontend Dashboard with the token in the URL 
-        # The frontend should grab this token and store it in localStorage
         return RedirectResponse(url=f"{FRONTEND_URL}/dashboard?token={access_token}")
 
     except Exception as e:
@@ -180,7 +182,8 @@ async def analyze_gameplay(current_user: User = Depends(get_current_user)):
 
 @app.get("/api/health")
 async def health_check():
-    return {"status": "healthy"}
+    """Health check endpoint"""
+    return {"status": "healthy", "service": "mythicvision-backend"}
 
 # --- SERVER STARTUP (Required for Render) ---
 if __name__ == "__main__":
