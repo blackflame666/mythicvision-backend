@@ -44,23 +44,28 @@ def get_db():
     finally:
         db.close()
 
-# --- CORS & SECURITY CONFIG ---
+# --- CONFIGURATION ---
 FRONTEND_URL = os.getenv("FRONTEND_URL", "https://mlcoach.online")
 API_URL = os.getenv("API_URL", "https://mythicvision-backend.onrender.com")
 SECRET_KEY = os.getenv("SECRET_KEY", "super-secret-key-change-this-in-production")
 ALGORITHM = "HS256"
 
-# CORS Middleware
+# 1. CORS Middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[FRONTEND_URL, "http://localhost:3000", "http://localhost:8000"],
+    allow_origins=["*"], # Allow all for testing, restrict later
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Session Middleware (REQUIRED for OAuth)
-app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY)
+# 2. Session Middleware (CRITICAL FIX FOR STATE MISMATCH)
+app.add_middleware(
+    SessionMiddleware, 
+    secret_key=SECRET_KEY,
+    https_only=False, # Must be False to prevent cookie dropping on redirects
+    same_site="lax"
+)
 
 # --- GOOGLE OAUTH SETUP ---
 oauth = OAuth()
@@ -83,7 +88,6 @@ def create_access_token(data: dict, expires_delta: timedelta = None):
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
 async def get_current_user(request: Request, db: Session = Depends(get_db)):
-    # Check for token in Authorization header or cookies
     token = request.headers.get("Authorization") or request.cookies.get("access_token")
     
     if not token:
@@ -118,7 +122,8 @@ def root():
 @app.get("/auth/google/login")
 async def google_login(request: Request):
     """Step 1: Redirect user to Google for authentication"""
-    redirect_uri = request.url_for('google_callback')
+    # HARDCODE the HTTPS redirect URI to prevent state mismatch errors
+    redirect_uri = f"{API_URL}/auth/google/callback"
     return await oauth.google.authorize_redirect(request, redirect_uri)
 
 @app.get("/auth/google/callback")
@@ -144,7 +149,6 @@ async def google_callback(request: Request, db: Session = Depends(get_db)):
             db.commit()
             db.refresh(db_user)
         else:
-            # Update last login time
             db_user.last_login = datetime.utcnow()
             db.commit()
 
@@ -152,7 +156,7 @@ async def google_callback(request: Request, db: Session = Depends(get_db)):
         token_data = {"sub": email, "user_id": db_user.id, "name": db_user.name}
         access_token = create_access_token(data=token_data)
 
-        # Redirect back to Frontend Dashboard with the token in the URL 
+        # Redirect back to Frontend Dashboard
         return RedirectResponse(url=f"{FRONTEND_URL}/dashboard?token={access_token}")
 
     except Exception as e:
@@ -161,31 +165,25 @@ async def google_callback(request: Request, db: Session = Depends(get_db)):
 
 @app.get("/api/me")
 async def get_current_user_profile(current_user: User = Depends(get_current_user)):
-    """Get the currently logged-in user's profile"""
     return {
         "id": current_user.id,
         "email": current_user.email,
         "name": current_user.name,
-        "avatar_url": current_user.avatar_url,
-        "created_at": current_user.created_at,
-        "last_login": current_user.last_login
+        "avatar_url": current_user.avatar_url
     }
 
 @app.post("/api/gameplay/analyze")
 async def analyze_gameplay(current_user: User = Depends(get_current_user)):
-    """Protected route: Analyze gameplay (Placeholder for future AI logic)"""
     return {
         "message": "Gameplay analysis endpoint ready",
-        "user": current_user.name,
-        "status": "awaiting video upload"
+        "user": current_user.name
     }
 
 @app.get("/api/health")
 async def health_check():
-    """Health check endpoint"""
-    return {"status": "healthy", "service": "mythicvision-backend"}
+    return {"status": "healthy"}
 
-# --- SERVER STARTUP (Required for Render) ---
+# --- SERVER STARTUP ---
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run(app, host="0.0.0.0", port=port)
