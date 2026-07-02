@@ -1,104 +1,51 @@
-# Fixed deployment
-from fastapi import FastAPI, UploadFile, File
-from fastapi.responses import JSONResponse
-import cv2
-import numpy as np
-from openai import OpenAI
-import tempfile
+from fastapi import APIRouter, Request, HTTPException
+from authlib.integrations.starlette_client import OAuth
+from jose import jwt
 import os
-from fastapi.middleware.cors import CORSMiddleware
 
-# ... existing code ...
+router = APIRouter()
+oauth = OAuth()
 
-app = FastAPI()
-
-# Add CORS middleware to allow requests from Hostinger
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # In production, replace "*" with your Hostinger domain
-    allow_credentials=True,
-    allow_methods=["*"],  # Allows all methods
-    allow_headers=["*"],  # Allows all headers
+# Configure Google OAuth
+oauth.register(
+    name='google',
+    client_id=os.getenv("GOOGLE_CLIENT_ID"),
+    client_secret=os.getenv("GOOGLE_CLIENT_SECRET"),
+    server_metadata_url='https://accounts.google.com/.well-known/openid-configuration',
+    client_kwargs={'scope': 'openid email profile'}
 )
 
-# ... rest of your code ...
+@router.get("/auth/google/login")
+async def google_login(request: Request):
+    # Redirect user to Google's login page
+    redirect_uri = "https://mlcoach.online/auth/google/callback" # Must match Google Console exactly
+    return await oauth.google.authorize_redirect(request, redirect_uri)
 
-# Initialize App and AI
-
-
-# Read the API key from Render's Environment Variables
-API_KEY = os.environ.get("OPENAI_API_KEY")
-
-if not API_KEY:
-    raise Exception("OPENAI_API_KEY environment variable not set!")
-
-client = OpenAI(api_key=API_KEY)
-
-@app.post("/analyze-match")
-async def analyze_match(file: UploadFile = File(...)):
-    print(f"📥 Received video: {file.filename}. Processing...")
-    
-    # 1. Save the uploaded video to a temporary file on the server
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp_file:
-        tmp_file.write(await file.read())
-        tmp_path = tmp_file.name
-
+@router.get("/auth/google/callback")
+async def google_callback(request: Request):
     try:
-        # 2. Run your Computer Vision logic (The "Eyes")
-        cap = cv2.VideoCapture(tmp_path)
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        timeline_data = []
-        current_time = 0.0
-        last_sampled_time = -10.0 # Sample every 10 seconds
-
-        while cap.isOpened():
-            ret, frame = cap.read()
-            if not ret: break
+        # Get the token from Google
+        token = await oauth.google.authorize_access_token(request)
+        user_info = token.get('userinfo')
+        
+        if not user_info:
+            raise HTTPException(status_code=400, detail="Failed to get user info")
             
-            current_time = cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0
-            
-            if current_time - last_sampled_time >= 10.0:
-                last_sampled_time = current_time
-                mins = int(current_time // 60)
-                secs = int(current_time % 60)
-                time_str = f"{mins:02d}:{secs:02d}"
-                
-                # Crop Minimap (Top-Left 25%)
-                h, w = frame.shape[:2]
-                minimap = frame[0:int(h*0.25), 0:int(w*0.25)]
-                
-                # Color Mask (Red/Orange enemies)
-                hsv = cv2.cvtColor(minimap, cv2.COLOR_BGR2HSV)
-                lower_red = np.array([0, 100, 100])
-                upper_red = np.array([10, 255, 255])
-                mask = cv2.inRange(hsv, lower_red, upper_red)
-                
-                # Count Contours
-                contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-                enemy_count = sum(1 for c in contours if cv2.contourArea(c) > 30)
-                
-                timeline_data.append({"time": time_str, "enemies_visible": enemy_count})
+        email = user_info.get('email')
+        name = user_info.get('name')
+        picture = user_info.get('picture')
         
-        cap.release()
-
-        # 3. Send to OpenAI (The "Brain")
-        timeline_string = "\n".join([f"- {d['time']}: {d['enemies_visible']} enemies visible" for d in timeline_data])
+        # TODO: Check if user exists in your database. 
+        # If not, create a new user record.
         
-        response = client.chat.completions.create(
-            model="gpt-4o",
-            messages=[
-                {"role": "system", "content": "You are an expert MLBB coach. Analyze this timeline and give a 3-paragraph report (Laning, Mid, Late game)."},
-                {"role": "user", "content": f"Timeline:\n{timeline_string}"}
-            ]
-        )
+        # Generate your own JWT token for your app
+        # token_payload = {"sub": email, "name": name}
+        # access_token = create_access_token(data=token_payload)
         
-        ai_report = response.choices[0].message.content
+        # Redirect back to your frontend dashboard with the token
+        # Example: return RedirectResponse(url=f"https://mlcoach.online/dashboard?token={access_token}")
         
-        # 4. Send the report back to the website
-        return JSONResponse(content={"status": "success", "report": ai_report})
-
+        return {"message": "Login successful", "user": user_info}
+        
     except Exception as e:
-        return JSONResponse(content={"status": "error", "message": str(e)}, status_code=500)
-    finally:
-        # Clean up the temporary file
-        os.unlink(tmp_path)
+        raise HTTPException(status_code=400, detail=str(e))
