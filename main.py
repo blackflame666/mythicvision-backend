@@ -53,18 +53,19 @@ ALGORITHM = "HS256"
 # 1. CORS Middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # Allow all for testing, restrict later
+    allow_origins=["*"],  # Allow all for testing, restrict later
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# 2. Session Middleware (CRITICAL FIX FOR STATE MISMATCH)
+# 2. Session Middleware (CRITICAL FIX FOR CSRF STATE MISMATCH)
 app.add_middleware(
-    SessionMiddleware, 
+    SessionMiddleware,
     secret_key=SECRET_KEY,
-    https_only=False, # Must be False to prevent cookie dropping on redirects
-    same_site="lax"
+    https_only=False,  # Must be False to prevent cookie dropping on redirects
+    same_site="lax",   # Lax allows cookies on top-level GET navigations
+    max_age=3600       # Session expires after 1 hour
 )
 
 # --- GOOGLE OAUTH SETUP ---
@@ -76,7 +77,6 @@ oauth.register(
     server_metadata_url='https://accounts.google.com/.well-known/openid-configuration',
     client_kwargs={
         'scope': 'openid email profile',
-        'redirect_uri': f"{API_URL}/auth/google/callback"
     },
 )
 
@@ -130,8 +130,19 @@ async def google_login(request: Request):
 async def google_callback(request: Request, db: Session = Depends(get_db)):
     """Step 2: Google redirects back here with user info"""
     try:
+        # Authorize access token (this validates the state parameter)
         token = await oauth.google.authorize_access_token(request)
+        
+        if not token:
+            raise HTTPException(status_code=400, detail="Failed to get access token from Google")
+        
+        # Get user info from the token
         user_info = token.get('userinfo')
+        
+        if not user_info:
+            # Try to fetch userinfo if not in token
+            resp = await oauth.google.get('https://www.googleapis.com/oauth2/v3/userinfo', token=token)
+            user_info = resp.json()
         
         if not user_info:
             raise HTTPException(status_code=400, detail="Failed to get user info from Google")
@@ -149,6 +160,7 @@ async def google_callback(request: Request, db: Session = Depends(get_db)):
             db.commit()
             db.refresh(db_user)
         else:
+            # Update last login time
             db_user.last_login = datetime.utcnow()
             db.commit()
 
@@ -156,7 +168,7 @@ async def google_callback(request: Request, db: Session = Depends(get_db)):
         token_data = {"sub": email, "user_id": db_user.id, "name": db_user.name}
         access_token = create_access_token(data=token_data)
 
-        # Redirect back to Frontend Dashboard
+        # Redirect back to Frontend Dashboard with the token in the URL
         return RedirectResponse(url=f"{FRONTEND_URL}/dashboard?token={access_token}")
 
     except Exception as e:
@@ -165,25 +177,31 @@ async def google_callback(request: Request, db: Session = Depends(get_db)):
 
 @app.get("/api/me")
 async def get_current_user_profile(current_user: User = Depends(get_current_user)):
+    """Get the currently logged-in user's profile"""
     return {
         "id": current_user.id,
         "email": current_user.email,
         "name": current_user.name,
-        "avatar_url": current_user.avatar_url
+        "avatar_url": current_user.avatar_url,
+        "created_at": current_user.created_at,
+        "last_login": current_user.last_login
     }
 
 @app.post("/api/gameplay/analyze")
 async def analyze_gameplay(current_user: User = Depends(get_current_user)):
+    """Protected route: Analyze gameplay (Placeholder for future AI logic)"""
     return {
         "message": "Gameplay analysis endpoint ready",
-        "user": current_user.name
+        "user": current_user.name,
+        "status": "awaiting video upload"
     }
 
 @app.get("/api/health")
 async def health_check():
-    return {"status": "healthy"}
+    """Health check endpoint"""
+    return {"status": "healthy", "service": "mythicvision-backend"}
 
-# --- SERVER STARTUP ---
+# --- SERVER STARTUP (Required for Render) ---
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run(app, host="0.0.0.0", port=port)
