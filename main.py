@@ -271,6 +271,52 @@ async def upload_gameplay(
         "plan_type": current_user.plan_type
     }
 
+# --- GET ANALYSIS RESULTS ---
+@app.get("/api/gameplay/{file_id}")
+async def get_analysis_results(
+    file_id: str,
+    current_user: User = Depends(get_current_user)
+):
+    """Get analysis results for an uploaded match"""
+    
+    # Check if file exists
+    file_path = Path(f"uploads/gameplay/{file_id}")
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Match file not found")
+    
+    # For now, return mock analysis data
+    # TODO: Replace with real AI analysis
+    return {
+        "file_id": file_id,
+        "status": "completed",
+        "hero_focus": "overall gameplay",
+        "analysis": {
+            "summary": "AI analysis is being developed. This is a placeholder response.",
+            "death_autopsy": {
+                "total_deaths": 0,
+                "deaths": [],
+                "message": "Death analysis will be available soon"
+            },
+            "itemization": {
+                "items_built": [],
+                "recommendations": [],
+                "message": "Itemization analysis will be available soon"
+            },
+            "economy": {
+                "gold_per_minute": 0,
+                "last_hits": 0,
+                "message": "Economy analysis will be available soon"
+            },
+            "map_awareness": {
+                "wards_placed": 0,
+                "objectives_secured": 0,
+                "message": "Map awareness analysis will be available soon"
+            }
+        },
+        "video_url": f"/uploads/gameplay/{file_id}",
+        "created_at": datetime.utcnow().isoformat()
+    }
+
 # --- SUBSCRIPTION UPGRADE (PayPal Integration) ---
 @app.post("/api/subscription/upgrade")
 async def upgrade_subscription(
