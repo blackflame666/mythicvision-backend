@@ -1,7 +1,7 @@
 import os
 import shutil
 from pathlib import Path
-from fastapi import FastAPI, Request, HTTPException, Depends, UploadFile, File
+from fastapi import FastAPI, Request, HTTPException, Depends, UploadFile, File, Form
 from fastapi.responses import RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
@@ -217,6 +217,55 @@ async def analyze_gameplay(request: AnalyzeRequest, current_user: User = Depends
         "plan_type": current_user.plan_type or "free",
         "analysis_focus": focus_text,
         "status": "processing video..."
+    }
+
+# --- VIDEO UPLOAD ENDPOINT ---
+@app.post("/api/gameplay/upload")
+async def upload_gameplay(
+    file: UploadFile = File(...),
+    hero_name: str = Form(None),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Upload MLBB match replay for AI analysis"""
+    
+    # Validate file type
+    allowed_types = ["video/mp4", "video/quicktime", "video/x-msvideo"]
+    if file.content_type not in allowed_types:
+        raise HTTPException(status_code=400, detail="Only MP4, MOV, and AVI video files allowed")
+    
+    # Check file size (500MB max)
+    contents = await file.read()
+    if len(contents) > 500 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="File size must be less than 500MB")
+    
+    # Check if user is premium for hero selection
+    if hero_name and hero_name.lower() != "null" and not current_user.is_premium:
+        raise HTTPException(
+            status_code=403,
+            detail="Hero-specific analysis is an Elite feature. Please upgrade your subscription."
+        )
+    
+    # Create uploads directory
+    upload_dir = Path("uploads/gameplay")
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Save file with unique name
+    file_extension = file.filename.split('.')[-1] if '.' in file.filename else 'mp4'
+    unique_filename = f"{current_user.id}_{datetime.utcnow().timestamp()}.{file_extension}"
+    file_path = upload_dir / unique_filename
+    
+    with open(file_path, "wb") as buffer:
+        buffer.write(contents)
+    
+    # Return success response
+    return {
+        "message": "Video uploaded successfully",
+        "file_id": unique_filename,
+        "hero_focus": hero_name if hero_name and hero_name.lower() != "null" else "overall gameplay",
+        "status": "queued for analysis",
+        "user": current_user.name,
+        "plan_type": current_user.plan_type
     }
 
 # --- SUBSCRIPTION UPGRADE (PayPal Integration) ---
