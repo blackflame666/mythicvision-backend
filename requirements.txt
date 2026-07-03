@@ -7,3 +7,4 @@ itsdangerous==2.1.2
 python-dotenv==1.0.0
 sqlalchemy==2.0.31
 starlette==0.35.1
+python-multipart==0.0.6
