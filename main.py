@@ -138,13 +138,11 @@ def root():
 
 @app.get("/auth/google/login")
 async def google_login(request: Request):
-    """Step 1: Redirect user to Google for authentication"""
     redirect_uri = f"{API_URL}/auth/google/callback"
     return await oauth.google.authorize_redirect(request, redirect_uri)
 
 @app.get("/auth/google/callback")
 async def google_callback(request: Request, db: Session = Depends(get_db)):
-    """Step 2: Google redirects back here with user info"""
     try:
         token = await oauth.google.authorize_access_token(request)
         if not token:
@@ -160,16 +158,11 @@ async def google_callback(request: Request, db: Session = Depends(get_db)):
         avatar = user_info.get('picture')
         google_id = user_info.get('sub')
 
-        # Check if user exists, create if new
         db_user = db.query(User).filter(User.email == email).first()
         if not db_user:
             db_user = User(
-                email=email, 
-                name=name, 
-                avatar_url=avatar, 
-                google_id=google_id, 
-                is_premium=False,
-                plan_type="free"
+                email=email, name=name, avatar_url=avatar, google_id=google_id, 
+                is_premium=False, plan_type="free"
             )
             db.add(db_user)
             db.commit()
@@ -178,7 +171,6 @@ async def google_callback(request: Request, db: Session = Depends(get_db)):
             db_user.last_login = datetime.utcnow()
             db.commit()
 
-        # Generate JWT Token
         access_token = create_access_token(data={"sub": email, "user_id": db_user.id, "name": db_user.name})
         return RedirectResponse(url=f"{FRONTEND_URL}/dashboard?token={access_token}")
     except Exception as e:
@@ -187,7 +179,6 @@ async def google_callback(request: Request, db: Session = Depends(get_db)):
 
 @app.get("/api/me")
 async def get_current_user_profile(current_user: User = Depends(get_current_user)):
-    """Get the currently logged-in user's profile"""
     return {
         "id": current_user.id,
         "email": current_user.email,
@@ -199,18 +190,11 @@ async def get_current_user_profile(current_user: User = Depends(get_current_user
         "last_login": current_user.last_login
     }
 
-# --- GAMEPLAY ANALYSIS (Elite-Only Hero Selection) ---
 @app.post("/api/gameplay/analyze")
 async def analyze_gameplay(request: AnalyzeRequest, current_user: User = Depends(get_current_user)):
-    """Analyze gameplay. Hero selection is ELITE only (not Pro)."""
-    # Check if user is trying to use hero-specific analysis
     if request.hero_name and request.hero_name.lower() != "null":
-        # Only Elite users can use hero selection
         if current_user.plan_type != "elite":
-            raise HTTPException(
-                status_code=403,
-                detail="Hero-specific analysis is an Elite-exclusive feature. Please upgrade to Elite plan."
-            )
+            raise HTTPException(status_code=403, detail="Hero-specific analysis is an Elite-exclusive feature.")
     
     focus_text = f"focusing specifically on {request.hero_name}" if request.hero_name else "analyzing overall gameplay"
     return {
@@ -222,7 +206,6 @@ async def analyze_gameplay(request: AnalyzeRequest, current_user: User = Depends
         "status": "processing video..."
     }
 
-# --- VIDEO UPLOAD ENDPOINT (Elite-Only Hero Selection) ---
 @app.post("/api/gameplay/upload")
 async def upload_gameplay(
     file: UploadFile = File(...),
@@ -230,30 +213,20 @@ async def upload_gameplay(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Upload MLBB match replay for AI analysis. Hero selection is ELITE only."""
-    
-    # Validate file type
     allowed_types = ["video/mp4", "video/quicktime", "video/x-msvideo"]
     if file.content_type not in allowed_types:
         raise HTTPException(status_code=400, detail="Only MP4, MOV, and AVI video files allowed")
     
-    # Check file size (500MB max)
     contents = await file.read()
     if len(contents) > 500 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="File size must be less than 500MB")
     
-    # Check if user is Elite for hero selection (Pro users cannot use this feature)
     if hero_name and hero_name.lower() != "null" and current_user.plan_type != "elite":
-        raise HTTPException(
-            status_code=403,
-            detail="Hero-specific analysis is an Elite-exclusive feature. Please upgrade to Elite plan."
-        )
+        raise HTTPException(status_code=403, detail="Hero-specific analysis is an Elite-exclusive feature.")
     
-    # Create uploads directory
     upload_dir = Path("uploads/gameplay")
     upload_dir.mkdir(parents=True, exist_ok=True)
     
-    # Save file with unique name
     file_extension = file.filename.split('.')[-1] if '.' in file.filename else 'mp4'
     unique_filename = f"{current_user.id}_{datetime.utcnow().timestamp()}.{file_extension}"
     file_path = upload_dir / unique_filename
@@ -261,7 +234,6 @@ async def upload_gameplay(
     with open(file_path, "wb") as buffer:
         buffer.write(contents)
     
-    # Return success response
     return {
         "message": "Video uploaded successfully",
         "file_id": unique_filename,
@@ -271,102 +243,106 @@ async def upload_gameplay(
         "plan_type": current_user.plan_type
     }
 
-# --- GET ANALYSIS RESULTS ---
+# --- GET ANALYSIS RESULTS (UPDATED WITH GAMEPLAY FOCUS) ---
 @app.get("/api/gameplay/{file_id}")
 async def get_analysis_results(
     file_id: str,
     current_user: User = Depends(get_current_user)
 ):
-    """Get analysis results for an uploaded match"""
-    
-    # Check if file exists
     file_path = Path(f"uploads/gameplay/{file_id}")
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="Match file not found")
     
-    # For now, return mock analysis data
-    # TODO: Replace with real AI analysis
+    # Realistic Mock Data focusing on Gameplay, Mistakes, and Positioning
     return {
         "file_id": file_id,
         "status": "completed",
         "hero_focus": "overall gameplay",
+        "match_summary": "Victory | 8/3/12 KDA | Gold Lane",
         "analysis": {
-            "summary": "AI analysis is being developed. This is a placeholder response.",
-            "death_autopsy": {
-                "total_deaths": 0,
-                "deaths": [],
-                "message": "Death analysis will be available soon"
+            "gameplay_mechanics": {
+                "title": "Gameplay & Mechanics",
+                "score": "8.5/10",
+                "details": "Your skill combos were executed well, especially during the team fight at the 12-minute mark. However, you missed 2 crucial Skill 2s during the early laning phase which cost you CS.",
+                "tips": [
+                    "Practice canceling attack animations with movement to increase DPS.",
+                    "Use Skill 1 to poke from max range before committing to an all-in."
+                ]
             },
-            "itemization": {
-                "items_built": [],
-                "recommendations": [],
-                "message": "Itemization analysis will be available soon"
+            "mistakes_corrections": {
+                "title": "Mistakes & Corrections",
+                "critical_errors": [
+                    {
+                        "time": "04:30",
+                        "what_happened": "Overextended past the river without vision.",
+                        "why_it_was_wrong": "Enemy Jungler was missing from the minimap for 10 seconds.",
+                        "how_to_fix": "Always check the minimap before pushing the wave. If you don't see the enemy jungler, assume they are in the bush waiting for you."
+                    },
+                    {
+                        "time": "15:20",
+                        "what_happened": "Used ultimate ability to secure a kill on a low-health tank.",
+                        "why_it_was_wrong": "The enemy team was grouping for the Lord. You needed your ultimate for the upcoming team fight.",
+                        "how_to_fix": "Save high-impact abilities for team fights or objectives. Let the tank die if it means securing the Lord for your team."
+                    }
+                ]
             },
-            "economy": {
-                "gold_per_minute": 0,
-                "last_hits": 0,
-                "message": "Economy analysis will be available soon"
+            "positioning_rotations": {
+                "title": "Positioning & Rotations",
+                "score": "7/10",
+                "details": "Your positioning in team fights was generally safe, staying behind your tank. However, your rotations to the mid-lane were slow, causing your mid-laner to lose pressure.",
+                "tips": [
+                    "Clear your wave quickly and immediately rotate to the gold/mid lane when your jungler is invading.",
+                    "In team fights, position yourself at the edge of the enemy's engage range."
+                ]
             },
-            "map_awareness": {
-                "wards_placed": 0,
-                "objectives_secured": 0,
-                "message": "Map awareness analysis will be available soon"
+            "itemization_macro": {
+                "title": "Itemization & Macro Play",
+                "items_built": ["Swift Boots", "Corrosion Scythe", "Demon Hunter Sword", "Windtalker"],
+                "macro_score": "9/10",
+                "details": "Excellent farming efficiency (650 GPM). You consistently took towers after winning fights. Consider building 'Sea Halberd' earlier if the enemy has high HP regeneration.",
+                "recommendations": [
+                    "Swap 'Windtalker' for 'Blade of Despair' if you are significantly ahead in gold.",
+                    "Focus on taking the Turtle early to secure gold for your team."
+                ]
             }
         },
         "video_url": f"/uploads/gameplay/{file_id}",
         "created_at": datetime.utcnow().isoformat()
     }
 
-# --- SUBSCRIPTION UPGRADE (PayPal Integration) ---
 @app.post("/api/subscription/upgrade")
 async def upgrade_subscription(
     request: UpgradeRequest, 
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Called by frontend after successful PayPal payment"""
     plan = request.plan_name.lower()
-    
     if plan not in ["pro", "elite"]:
-        raise HTTPException(status_code=400, detail="Invalid plan name. Must be 'pro' or 'elite'")
+        raise HTTPException(status_code=400, detail="Invalid plan name.")
     
     current_user.is_premium = True
     current_user.plan_type = plan
     db.commit()
     
-    return {
-        "message": f"Successfully upgraded to {plan}!",
-        "is_premium": True,
-        "plan_type": plan
-    }
+    return {"message": f"Successfully upgraded to {plan}!", "is_premium": True, "plan_type": plan}
 
-# --- AVATAR UPLOAD ---
 @app.post("/api/user/avatar")
-async def upload_avatar(
-    file: UploadFile = File(...), 
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """Upload custom avatar image"""
+async def upload_avatar(file: UploadFile = File(...), current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     allowed_types = ["image/jpeg", "image/png", "image/jpg"]
     if file.content_type not in allowed_types:
         raise HTTPException(status_code=400, detail="Only JPG and PNG images allowed")
     
-    # Check file size (2MB max)
     contents = await file.read()
     if len(contents) > 2 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="File size must be less than 2MB")
     
-    # Create uploads directory
     upload_dir = Path("uploads/avatars")
     upload_dir.mkdir(parents=True, exist_ok=True)
     
-    # Save file
     file_path = upload_dir / f"{current_user.id}_{file.filename}"
     with open(file_path, "wb") as buffer:
         buffer.write(contents)
     
-    # Update user avatar URL
     avatar_url = f"/uploads/avatars/{current_user.id}_{file.filename}"
     current_user.avatar_url = avatar_url
     db.commit()
@@ -375,10 +351,8 @@ async def upload_avatar(
 
 @app.get("/api/health")
 async def health_check():
-    """Health check endpoint"""
     return {"status": "healthy", "service": "mythicvision-backend"}
 
-# --- SERVER STARTUP (Required for Render) ---
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run(app, host="0.0.0.0", port=port)
