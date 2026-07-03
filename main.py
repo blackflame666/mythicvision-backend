@@ -164,16 +164,15 @@ async def analyze_screenshot(
     
     base64_image = base64.b64encode(contents).decode('utf-8')
 
-    # 4. Prepare AI Prompt
+    # 4. Prepare AI Prompt - FIXED: Moved JSON structure outside f-string
     hero_context = f"The user states they played the hero: {hero_name}. " if (hero_name and hero_name.lower() != "null") else ""
     
     system_prompt = """You are a professional Mobile Legends: Bang Bang esports coach. You analyze post-game screenshots to provide detailed, actionable coaching. 
     You must output ONLY valid JSON. No markdown formatting, no code blocks, just raw JSON.
     Analyze the visible stats (KDA, Items, Gold, Damage, etc.) and generate a report."""
 
-    user_prompt = f"""{hero_context}Analyze this MLBB post-game screenshot. Extract the stats. Generate a detailed coaching report based on these stats. 
-    Output strictly in this JSON format: 
-    {
+    # FIXED: Define JSON structure separately, then format it
+    json_structure = {
         "match_summary": "string (e.g., Victory | 8/3/12 KDA)",
         "overall_rating": "string (e.g., 8.5/10)",
         "analysis": {
@@ -216,7 +215,11 @@ async def analyze_screenshot(
             "priority_2": "string",
             "priority_3": "string"
         }
-    }"""
+    }
+    
+    user_prompt = f"""{hero_context}Analyze this MLBB post-game screenshot. Extract the stats. Generate a detailed coaching report based on these stats. 
+    Output strictly in this JSON format: 
+    {json.dumps(json_structure, indent=2)}"""
 
     # 5. Call OpenAI API
     try:
@@ -255,13 +258,10 @@ async def analyze_screenshot(
 # --- LEGACY VIDEO UPLOAD (Kept for now, but screenshot is preferred) ---
 @app.post("/api/gameplay/upload")
 async def upload_gameplay(file: UploadFile = File(...), hero_name: str = Form(None), current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    # (Keep existing video upload code if needed, or remove it)
     return {"message": "Please use the screenshot upload endpoint for real AI analysis."}
 
 @app.get("/api/gameplay/{file_id}")
 async def get_analysis_results(file_id: str, current_user: User = Depends(get_current_user)):
-    # Since we are doing real-time analysis now, this endpoint might need to fetch from a DB.
-    # For now, we will rely on the frontend storing the result from the analyze-screenshot response.
     raise HTTPException(status_code=404, detail="Use the analyze-screenshot endpoint for real-time results.")
 
 @app.post("/api/subscription/upgrade")
