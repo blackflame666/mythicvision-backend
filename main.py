@@ -76,8 +76,6 @@ app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY, https_only=False, s
 oauth = OAuth()
 oauth.register(name='google', client_id=os.getenv("GOOGLE_CLIENT_ID"), client_secret=os.getenv("GOOGLE_CLIENT_SECRET"), server_metadata_url='https://accounts.google.com/.well-known/openid-configuration', client_kwargs={'scope': 'openid email profile'})
 
-class AnalyzeRequest(BaseModel):
-    hero_name: str = None
 class UpgradeRequest(BaseModel):
     plan_name: str
 
@@ -140,88 +138,94 @@ async def google_callback(request: Request, db: Session = Depends(get_db)):
 async def get_current_user_profile(current_user: User = Depends(get_current_user)):
     return {"id": current_user.id, "email": current_user.email, "name": current_user.name, "avatar_url": current_user.avatar_url, "is_premium": current_user.is_premium or False, "plan_type": current_user.plan_type or "free", "created_at": current_user.created_at, "last_login": current_user.last_login}
 
-# --- REAL AI SCREENSHOT ANALYSIS ENDPOINT ---
+# --- ULTIMATE COACH AI SCREENSHOT ANALYSIS ---
 @app.post("/api/gameplay/analyze-screenshot")
 async def analyze_screenshot(
     file: UploadFile = File(...),
-    hero_name: str = Form(None),
+    player_name: str = Form(...),
     current_user: User = Depends(get_current_user)
 ):
-    """Upload a post-game screenshot and get REAL AI analysis"""
+    """Upload a post-game screenshot and get a massive, detailed AI coaching report"""
     
-    # 1. Validate File
     if not file.content_type or "image" not in file.content_type:
-        raise HTTPException(status_code=400, detail="Only image files (JPG/PNG) are allowed for analysis.")
+        raise HTTPException(status_code=400, detail="Only image files (JPG/PNG) are allowed.")
     
-    # 2. Check Elite status if hero_name is provided
-    if hero_name and hero_name.lower() != "null" and current_user.plan_type != "elite":
-        raise HTTPException(status_code=403, detail="Hero-specific analysis is an Elite-exclusive feature.")
-
-    # 3. Read and Encode Image
     contents = await file.read()
-    if len(contents) > 5 * 1024 * 1024: # 5MB limit for images
+    if len(contents) > 5 * 1024 * 1024: 
         raise HTTPException(status_code=400, detail="Image size must be less than 5MB")
     
     base64_image = base64.b64encode(contents).decode('utf-8')
 
-    # 4. Prepare AI Prompt - FIXED: Moved JSON structure outside f-string
-    hero_context = f"The user states they played the hero: {hero_name}. " if (hero_name and hero_name.lower() != "null") else ""
-    
-    system_prompt = """You are a professional Mobile Legends: Bang Bang esports coach. You analyze post-game screenshots to provide detailed, actionable coaching. 
-    You must output ONLY valid JSON. No markdown formatting, no code blocks, just raw JSON.
-    Analyze the visible stats (KDA, Items, Gold, Damage, etc.) and generate a report."""
+    # THE ULTIMATE COACH PROMPT
+    system_prompt = """You are the world's greatest Mobile Legends: Bang Bang Esports Coach. You are known for your brutal honesty, deep game knowledge, and ability to find hidden mistakes in player data. 
+    You do not just read stats; you deduce gameplay behavior from them.
+    You must output ONLY valid JSON. No markdown formatting, no code blocks, just raw JSON."""
 
-    # FIXED: Define JSON structure separately, then format it
-    json_structure = {
-        "match_summary": "string (e.g., Victory | 8/3/12 KDA)",
-        "overall_rating": "string (e.g., 8.5/10)",
+    user_prompt = f"""Analyze this Mobile Legends post-game scoreboard for the player named: "{player_name}"
+
+    YOUR ANALYSIS FRAMEWORK (Be extremely detailed and write long paragraphs):
+    
+    1. IDENTIFY THE PLAYER: Find the exact row for "{player_name}". Note their Hero, KDA, Gold, Items, and Score.
+    2. DEDUCE ROLE & EXPECTATIONS: Based on the hero, what was their job? (e.g., If Tank, they should peel and initiate. If Marksman, they should farm and deal damage).
+    3. ANALYZE KDA CONTEXT: 
+       - High Kills/Low Deaths: Good mechanics, but did they secure objectives?
+       - Low Kills/High Deaths: Positioning errors, getting caught out, or diving too deep.
+       - High Assists: Good team player, but did they rely too much on teammates?
+    4. ITEMIZATION FORENSICS: Look at their 6 items. 
+       - Did they build the right items for the enemy team composition? (e.g., Building physical defense against a magic damage team is a fatal mistake).
+       - Did they finish their core build?
+    5. MACRO & ECONOMY: Look at their Gold compared to teammates. 
+       - If they have low gold but high kills, they are killing but not farming (bad macro).
+       - If they have high gold but low impact, they are farming but not fighting (cowardly play).
+    6. MISTAKE AUTOPSY: Based on the above, deduce their biggest mistake. (e.g., "You died 8 times because you were building squishy damage items as a Tank, or you were overextending without vision.")
+
+    Generate a MASSIVE, comprehensive coaching report. Do not be brief. Write like a professional analyst.
+    
+    Output strictly in this JSON format:
+    {json.dumps({
+        "match_summary": "string (e.g., Victory | 12:14 Duration | 2/4/20 KDA)",
+        "overall_rating": "string (e.g., 7.5/10 - Good mechanics but poor macro)",
         "analysis": {
             "gameplay_mechanics": {
-                "title": "Gameplay & Mechanics Analysis",
+                "title": "Gameplay & Mechanics Deep Dive",
                 "overall_score": "string",
-                "detailed_analysis": "string (2-3 paragraphs analyzing performance based on KDA and damage)",
-                "strengths": ["string", "string"],
-                "weaknesses": ["string", "string"],
-                "actionable_tips": ["string", "string"]
+                "detailed_analysis": "string (Write 3-4 long paragraphs analyzing their KDA, score, and role performance. Deduce their mechanical skill level.)",
+                "strengths": ["string (detailed point)", "string (detailed point)", "string (detailed point)"],
+                "weaknesses": ["string (detailed point)", "string (detailed point)", "string (detailed point)"],
+                "actionable_tips": ["string (specific drill or habit)", "string (specific drill or habit)", "string (specific drill or habit)"]
             },
             "mistakes_corrections": {
-                "title": "Critical Mistakes & Detailed Corrections",
+                "title": "Critical Mistakes & The 'Why'",
                 "critical_errors": [
                     {
-                        "time": "string (e.g., Late Game)",
-                        "severity": "string",
-                        "what_happened": "string (infer from stats, e.g., high deaths)",
-                        "why_it_was_wrong": "string",
-                        "how_to_fix": "string"
+                        "mistake": "string (e.g., Overextending without vision)",
+                        "evidence": "string (e.g., You died 8 times but only had 10k gold, meaning you died early and missed farm)",
+                        "correction": "string (Exactly what they should have done instead)"
+                    },
+                    {
+                        "mistake": "string",
+                        "evidence": "string",
+                        "correction": "string"
                     }
                 ]
-            },
-            "positioning_rotations": {
-                "title": "Positioning & Rotations Deep Dive",
-                "overall_score": "string",
-                "detailed_analysis": "string",
-                "actionable_tips": ["string", "string"]
             },
             "itemization_macro": {
                 "title": "Itemization & Macro Strategy",
                 "overall_score": "string",
-                "items_built": ["string (list items seen in screenshot)"],
-                "detailed_analysis": "string (analyze if items are good for the enemy comp)",
-                "actionable_tips": ["string", "string"]
+                "items_built": ["string (list the 6 items you see)"],
+                "detailed_analysis": "string (Write 2-3 paragraphs analyzing if their items were optimal. Did they counter the enemy? Did they build greedily?)",
+                "macro_assessment": "string (Analyze their gold and game duration. Did they play for early game or late game?)",
+                "actionable_tips": ["string (specific item advice)", "string (specific macro advice)"]
             }
         },
         "overall_recommendations": {
-            "priority_1": "string",
+            "priority_1": "string (The #1 thing they must fix to rank up)",
             "priority_2": "string",
-            "priority_3": "string"
+            "priority_3": "string",
+            "long_term_goal": "string (What rank can they reach if they fix these issues?)"
         }
-    }
-    
-    user_prompt = f"""{hero_context}Analyze this MLBB post-game screenshot. Extract the stats. Generate a detailed coaching report based on these stats. 
-    Output strictly in this JSON format: 
-    {json.dumps(json_structure, indent=2)}"""
+    }, indent=2)}"""
 
-    # 5. Call OpenAI API
     try:
         response = client.chat.completions.create(
             model="gpt-4o",
@@ -232,37 +236,25 @@ async def analyze_screenshot(
                     {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
                 ]}
             ],
-            max_tokens=2500
+            max_tokens=3000 # Increased for longer output
         )
         
-        # 6. Parse JSON Response
         content = response.choices[0].message.content
-        # Remove markdown code blocks if the AI adds them
         content = re.sub(r'^```json\s*', '', content)
         content = re.sub(r'\s*```$', '', content)
         
         analysis_data = json.loads(content)
-        
-        # Add metadata
         analysis_data["file_id"] = f"screenshot_{current_user.id}_{datetime.utcnow().timestamp()}"
-        analysis_data["hero_focus"] = hero_name if (hero_name and hero_name.lower() != "null") else "overall gameplay"
+        analysis_data["player_focus"] = player_name
         
         return analysis_data
 
     except json.JSONDecodeError:
+        print("Raw AI Output:", content)
         raise HTTPException(status_code=500, detail="AI returned invalid JSON. Please try a clearer screenshot.")
     except Exception as e:
         print(f"OpenAI Error: {e}")
         raise HTTPException(status_code=500, detail=f"AI Analysis failed: {str(e)}")
-
-# --- LEGACY VIDEO UPLOAD (Kept for now, but screenshot is preferred) ---
-@app.post("/api/gameplay/upload")
-async def upload_gameplay(file: UploadFile = File(...), hero_name: str = Form(None), current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    return {"message": "Please use the screenshot upload endpoint for real AI analysis."}
-
-@app.get("/api/gameplay/{file_id}")
-async def get_analysis_results(file_id: str, current_user: User = Depends(get_current_user)):
-    raise HTTPException(status_code=404, detail="Use the analyze-screenshot endpoint for real-time results.")
 
 @app.post("/api/subscription/upgrade")
 async def upgrade_subscription(request: UpgradeRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
