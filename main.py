@@ -18,19 +18,15 @@ from pydantic import BaseModel
 from openai import OpenAI
 import uvicorn
 
-# Load environment variables
 load_dotenv()
 
-# --- APP INITIALIZATION ---
 app = FastAPI(title="MythicVision Backend - ML Coach")
 
-# --- OPENAI SETUP ---
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 if not OPENAI_API_KEY:
-    print("WARNING: OPENAI_API_KEY is not set. AI analysis will fail.")
+    print("WARNING: OPENAI_API_KEY is not set.")
 client = OpenAI(api_key=OPENAI_API_KEY)
 
-# --- DATABASE SETUP ---
 SQLALCHEMY_DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./mlcoach.db")
 engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -64,7 +60,6 @@ def get_db():
     finally:
         db.close()
 
-# --- CONFIGURATION ---
 FRONTEND_URL = os.getenv("FRONTEND_URL", "https://mlcoach.online")
 API_URL = os.getenv("API_URL", "https://mythicvision-backend.onrender.com")
 SECRET_KEY = os.getenv("SECRET_KEY", "super-secret-key-change-this-in-production")
@@ -74,13 +69,7 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, 
 app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY, https_only=False, same_site="lax", max_age=3600)
 
 oauth = OAuth()
-oauth.register(
-    name='google',
-    client_id=os.getenv("GOOGLE_CLIENT_ID"),
-    client_secret=os.getenv("GOOGLE_CLIENT_SECRET"),
-    server_metadata_url='https://accounts.google.com/.well-known/openid-configuration',
-    client_kwargs={'scope': 'openid email profile'}
-)
+oauth.register(name='google', client_id=os.getenv("GOOGLE_CLIENT_ID"), client_secret=os.getenv("GOOGLE_CLIENT_SECRET"), server_metadata_url='https://accounts.google.com/.well-known/openid-configuration', client_kwargs={'scope': 'openid email profile'})
 
 class UpgradeRequest(BaseModel):
     plan_name: str
@@ -93,23 +82,17 @@ def create_access_token(data: dict, expires_delta: timedelta = None):
 
 async def get_current_user(request: Request, db: Session = Depends(get_db)):
     token = request.headers.get("Authorization")
-    if not token:
-        raise HTTPException(status_code=401, detail="Not authenticated")
-    if token.startswith("Bearer "):
-        token = token.split(" ")[1]
+    if not token: raise HTTPException(status_code=401, detail="Not authenticated")
+    if token.startswith("Bearer "): token = token.split(" ")[1]
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         email = payload.get("sub")
-        if email is None:
-            raise HTTPException(status_code=401, detail="Invalid token")
+        if email is None: raise HTTPException(status_code=401, detail="Invalid token")
         user = db.query(User).filter(User.email == email).first()
-        if user is None:
-            raise HTTPException(status_code=404, detail="User not found")
+        if user is None: raise HTTPException(status_code=404, detail="User not found")
         return user
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid token")
-
-# --- ROUTES ---
 
 @app.get("/")
 def root():
@@ -123,18 +106,13 @@ async def google_login(request: Request):
 async def google_callback(request: Request, db: Session = Depends(get_db)):
     try:
         token = await oauth.google.authorize_access_token(request)
-        if not token:
-            raise HTTPException(status_code=400, detail="Failed to get access token")
+        if not token: raise HTTPException(status_code=400, detail="Failed to get access token")
         user_info = token.get('userinfo')
         if not user_info:
             resp = await oauth.google.get('https://www.googleapis.com/oauth2/v3/userinfo', token=token)
             user_info = resp.json()
         
-        email = user_info.get('email')
-        name = user_info.get('name')
-        avatar = user_info.get('picture')
-        google_id = user_info.get('sub')
-        
+        email, name, avatar, google_id = user_info.get('email'), user_info.get('name'), user_info.get('picture'), user_info.get('sub')
         db_user = db.query(User).filter(User.email == email).first()
         if not db_user:
             db_user = User(email=email, name=name, avatar_url=avatar, google_id=google_id, is_premium=False, plan_type="free")
@@ -153,130 +131,81 @@ async def google_callback(request: Request, db: Session = Depends(get_db)):
 @app.get("/api/me")
 async def get_current_user_profile(current_user: User = Depends(get_current_user)):
     return {
-        "id": current_user.id,
-        "email": current_user.email,
-        "name": current_user.name,
-        "avatar_url": current_user.avatar_url,
-        "is_premium": current_user.is_premium or False,
-        "plan_type": current_user.plan_type or "free",
-        "created_at": current_user.created_at,
+        "id": current_user.id, "email": current_user.email, "name": current_user.name, 
+        "avatar_url": current_user.avatar_url, "is_premium": current_user.is_premium or False, 
+        "plan_type": current_user.plan_type or "free", "created_at": current_user.created_at, 
         "last_login": current_user.last_login
     }
 
-# --- ULTIMATE COACH AI SCREENSHOT ANALYSIS ---
 @app.post("/api/gameplay/analyze-screenshot")
 async def analyze_screenshot(
     file: UploadFile = File(...),
     player_name: str = Form(...),
     current_user: User = Depends(get_current_user)
 ):
-    """Upload a post-game screenshot and get a massive, detailed AI coaching report"""
-    
     if not file.content_type or "image" not in file.content_type:
         raise HTTPException(status_code=400, detail="Only image files (JPG/PNG) are allowed.")
     
     contents = await file.read()
-    if len(contents) > 5 * 1024 * 1024:
+    if len(contents) > 5 * 1024 * 1024: 
         raise HTTPException(status_code=400, detail="Image size must be less than 5MB")
     
     base64_image = base64.b64encode(contents).decode('utf-8')
 
-    # THE ULTIMATE COACH PROMPT - FORCES LONG, DETAILED OUTPUT
-    system_prompt = """You are the world's greatest Mobile Legends: Bang Bang Esports Coach. You provide EXTREMELY DETAILED, lengthy analysis. Each section must be 300-500 words minimum. You never return N/A, empty strings, or 'No details provided'. You are brutally honest, specific, and actionable."""
+    system_prompt = """You are the world's greatest Mobile Legends: Bang Bang Esports Coach.
+    RULES:
+    1. NEVER guess. If you can't see it, infer it from other stats. NEVER use "N/A" or "Data not available".
+    2. HERO IDENTIFICATION: Only identify the hero if the portrait next to the username is clearly visible. If you are unsure, DO NOT name the hero; refer to them as "The player".
+    3. ERROR HANDLING: If you cannot find the player name "{player_name}" anywhere on the scoreboard, you must return ONLY this JSON: { "error": "Player not found", "message": "The name '{player_name}' does not appear on this scoreboard." }"""
 
-    user_prompt = f"""Analyze this Mobile Legends post-game scoreboard for the player: "{player_name}"
-
-CRITICAL INSTRUCTIONS:
-1. Find the player "{player_name}" on the scoreboard by reading the text usernames next to hero portraits.
-2. Extract: Hero (identify from portrait), KDA (Kills/Deaths/Assists), Gold, all 6 Items, Score/Rating, Team side (left or right).
-3. Determine: Win/Loss (from the big VICTORY/DEFEAT text at top), Game Duration (from top right).
-4. Analyze EVERY aspect in EXTREME DETAIL - write 3-4 paragraphs per section minimum.
-
-YOU MUST FILL IN EVERY SINGLE FIELD BELOW. NO "N/A", NO EMPTY STRINGS, NO "No details provided", NO "No additional details provided".
-If you cannot determine something from the image, make an educated inference based on the visible stats and explain your reasoning.
-
-Return ONLY valid JSON in this EXACT structure (use double quotes for all strings):
-
-{{
-    "match_summary": "Victory/Defeat | Duration: XX:XX | KDA: X/X/X | Gold: XXXX",
-    "overall_rating": "X.X/10 - Detailed 1-sentence summary of performance",
-    "duration": "XX:XX",
-    "result": "Victory or Defeat",
-    "hero_played": "Hero Name identified from portrait",
-    "analysis": {{
-        "gameplay_mechanics": {{
-            "title": "Gameplay & Mechanics Deep Dive",
-            "overall_score": "XX/100",
-            "detailed_analysis": "Write 4-5 LONG paragraphs (500+ words total) analyzing: 1) Their KDA performance and what it reveals about their mechanics - were they getting picks, surviving fights, or feeding? 2) Their farming efficiency based on gold earned compared to teammates - did they maximize their economy? 3) Their score/rating and what it means in context of the match. 4) Comparison to teammates - were they carrying or being carried? 5) Role-specific expectations - as a [hero role], did they fulfill their job? Be brutally honest and cite specific numbers from the screenshot.",
-            "strengths": [
-                "Detailed strength #1 with specific evidence from screenshot (2-3 sentences)",
-                "Detailed strength #2 with specific evidence (2-3 sentences)",
-                "Detailed strength #3 with specific evidence (2-3 sentences)",
-                "Detailed strength #4 with specific evidence (2-3 sentences)"
-            ],
-            "weaknesses": [
-                "Detailed weakness #1 with specific evidence (2-3 sentences)",
-                "Detailed weakness #2 with specific evidence (2-3 sentences)",
-                "Detailed weakness #3 with specific evidence (2-3 sentences)",
-                "Detailed weakness #4 with specific evidence (2-3 sentences)"
-            ],
-            "actionable_tips": [
-                "Specific tip #1: Exactly what to practice and how, with a concrete example (2-3 sentences)",
-                "Specific tip #2: Exactly what to practice and how, with a concrete example (2-3 sentences)",
-                "Specific tip #3: Exactly what to practice and how, with a concrete example (2-3 sentences)",
-                "Specific tip #4: Exactly what to practice and how, with a concrete example (2-3 sentences)",
-                "Specific tip #5: Exactly what to practice and how, with a concrete example (2-3 sentences)"
-            ]
+    user_prompt = f"""Analyze this scoreboard for: "{player_name}".
+    
+    1. Find "{player_name}" by reading the text usernames.
+    2. Extract: KDA, Gold, Items (all 6), Score/Rating, Win/Loss, Duration.
+    3. If the hero portrait is clear, identify it. If not, just say "Played a [Role] hero".
+    4. Provide a MASSIVE, detailed analysis. NO "N/A".
+    
+    Return JSON:
+    {{
+        "match_summary": "Victory/Defeat | Duration: XX:XX | KDA: X/X/X",
+        "overall_rating": "X.X/10 - Summary",
+        "duration": "XX:XX",
+        "result": "Victory/Defeat",
+        "hero_played": "Hero Name OR 'Unknown Hero (Role)'",
+        "analysis": {{
+            "gameplay_mechanics": {{
+                "title": "Gameplay & Mechanics Deep Dive",
+                "overall_score": "XX/100",
+                "detailed_analysis": "4-5 LONG paragraphs analyzing KDA, Score, and Role performance. Cite specific numbers.",
+                "strengths": ["Strength 1 (2-3 sentences)", "Strength 2", "Strength 3", "Strength 4"],
+                "weaknesses": ["Weakness 1", "Weakness 2", "Weakness 3", "Weakness 4"],
+                "actionable_tips": ["Tip 1", "Tip 2", "Tip 3", "Tip 4", "Tip 5"]
+            }},
+            "mistakes_corrections": {{
+                "title": "Critical Mistakes & The Why",
+                "critical_errors": [
+                    {{"mistake": "Mistake 1", "evidence": "Evidence from stats", "correction": "Correction"}},
+                    {{"mistake": "Mistake 2", "evidence": "Evidence", "correction": "Correction"}},
+                    {{"mistake": "Mistake 3", "evidence": "Evidence", "correction": "Correction"}},
+                    {{"mistake": "Mistake 4", "evidence": "Evidence", "correction": "Correction"}}
+                ]
+            }},
+            "itemization_macro": {{
+                "title": "Itemization & Macro Strategy",
+                "overall_score": "XX/100",
+                "items_built": ["Item 1", "Item 2", "Item 3", "Item 4", "Item 5", "Item 6"],
+                "detailed_analysis": "4-5 LONG paragraphs analyzing items vs enemy team. Cite specific items.",
+                "macro_assessment": "3-4 paragraphs analyzing Gold efficiency and game duration impact.",
+                "actionable_tips": ["Tip 1", "Tip 2", "Tip 3", "Tip 4", "Tip 5"]
+            }}
         }},
-        "mistakes_corrections": {{
-            "title": "Critical Mistakes & The Why",
-            "critical_errors": [
-                {{
-                    "mistake": "Specific mistake #1 - describe exactly what went wrong based on the stats (2-3 sentences)",
-                    "evidence": "Concrete evidence from the screenshot - cite specific numbers like deaths, gold, items, or score that prove this mistake happened (2-3 sentences)",
-                    "correction": "Detailed correction - explain EXACTLY what they should do differently next time, with specific in-game examples and scenarios (4-5 sentences)"
-                }},
-                {{
-                    "mistake": "Specific mistake #2 (2-3 sentences)",
-                    "evidence": "Concrete evidence from screenshot (2-3 sentences)",
-                    "correction": "Detailed correction (4-5 sentences)"
-                }},
-                {{
-                    "mistake": "Specific mistake #3 (2-3 sentences)",
-                    "evidence": "Concrete evidence from screenshot (2-3 sentences)",
-                    "correction": "Detailed correction (4-5 sentences)"
-                }},
-                {{
-                    "mistake": "Specific mistake #4 (2-3 sentences)",
-                    "evidence": "Concrete evidence from screenshot (2-3 sentences)",
-                    "correction": "Detailed correction (4-5 sentences)"
-                }}
-            ]
-        }},
-        "itemization_macro": {{
-            "title": "Itemization & Macro Strategy Analysis",
-            "overall_score": "XX/100",
-            "items_built": ["Item 1 name", "Item 2 name", "Item 3 name", "Item 4 name", "Item 5 name", "Item 6 name"],
-            "detailed_analysis": "Write 4-5 LONG paragraphs (500+ words) analyzing: 1) Whether their item build is optimal for their specific hero - compare to standard pro builds. 2) Whether items counter the enemy team composition visible on the scoreboard - did they build anti-heal against healers, magic defense against mages, etc.? 3) Item timing and progression - did they finish core items at the right time? 4) Missing key items they should have built instead. 5) Specific item swaps that would have improved their performance. Be extremely specific - name exact items and explain why each is good or bad.",
-            "macro_assessment": "Write 3-4 paragraphs (300+ words) analyzing: 1) Their gold efficiency - did they convert farm into impact? 2) Whether they farmed enough for their role - compare gold to teammates in similar roles. 3) Objective control inferred from game duration and result - did they play for early game or late game? 4) Map awareness and rotation patterns inferred from gold/assists ratio. 5) What they should prioritize in future games to improve macro play.",
-            "actionable_tips": [
-                "Specific item tip #1 - name exact items and when to build them (2-3 sentences)",
-                "Specific item tip #2 - name exact items and when to build them (2-3 sentences)",
-                "Specific macro tip #3 - specific in-game behavior to change (2-3 sentences)",
-                "Specific macro tip #4 - specific in-game behavior to change (2-3 sentences)",
-                "Specific macro tip #5 - specific in-game behavior to change (2-3 sentences)"
-            ]
+        "overall_recommendations": {{
+            "priority_1": "Priority 1 (3-4 sentences)",
+            "priority_2": "Priority 2 (3-4 sentences)",
+            "priority_3": "Priority 3 (3-4 sentences)",
+            "long_term_goal": "Long term goal (3-4 sentences)"
         }}
-    }},
-    "overall_recommendations": {{
-        "priority_1": "The #1 most critical thing to fix - explain WHY it matters and HOW to fix it with specific steps (3-4 detailed sentences)",
-        "priority_2": "The #2 most critical thing - explain WHY and HOW (3-4 detailed sentences)",
-        "priority_3": "The #3 most critical thing - explain WHY and HOW (3-4 detailed sentences)",
-        "long_term_goal": "Detailed 4-5 sentence analysis of what rank they can reach if they fix these issues, with a realistic timeline, specific milestones to hit, and encouragement"
-    }}
-}}
-
-REMEMBER: Every field must be filled with substantial content. Every paragraph must be lengthy and detailed. NO SHORT ANSWERS. NO N/A. NO EMPTY STRINGS. This is a professional coaching report that a paying user deserves."""
+    }}"""
 
     try:
         response = client.chat.completions.create(
@@ -292,82 +221,48 @@ REMEMBER: Every field must be filled with substantial content. Every paragraph m
         )
         
         content = response.choices[0].message.content
-        print("RAW AI RESPONSE START:", content[:500])
-        print("RAW AI RESPONSE LENGTH:", len(content))
-        
-        # Clean markdown code blocks
         content = re.sub(r'^```json\s*', '', content)
         content = re.sub(r'\s*```$', '', content)
         
         analysis_data = json.loads(content)
         
-        # Validate critical fields are not empty
-        required_fields = [
-            'match_summary',
-            'overall_rating',
-            'analysis.gameplay_mechanics.detailed_analysis',
-            'analysis.mistakes_corrections.critical_errors',
-            'analysis.itemization_macro.detailed_analysis'
-        ]
-        
-        for field in required_fields:
-            keys = field.split('.')
-            obj = analysis_data
-            for key in keys:
-                if isinstance(obj, dict):
-                    obj = obj.get(key)
-                else:
-                    obj = None
-                    break
-            if not obj or (isinstance(obj, str) and obj.strip() == ''):
-                print(f"WARNING: Empty field detected: {field}")
-        
+        # CHECK FOR ERROR RESPONSE (Player not found)
+        if "error" in analysis_data and analysis_data["error"] == "Player not found":
+            raise HTTPException(status_code=404, detail=analysis_data["message"])
+
         analysis_data["file_id"] = f"screenshot_{current_user.id}_{datetime.utcnow().timestamp()}"
         analysis_data["player_focus"] = player_name
         
         return analysis_data
 
     except json.JSONDecodeError as e:
-        print("JSON DECODE ERROR")
-        print("Raw content:", content)
-        raise HTTPException(status_code=500, detail=f"AI returned invalid JSON: {str(e)}")
+        print("JSON Error:", content)
+        raise HTTPException(status_code=500, detail="AI returned invalid JSON.")
+    except HTTPException:
+        raise
     except Exception as e:
-        print(f"ANALYSIS ERROR: {e}")
-        raise HTTPException(status_code=500, detail=f"AI Analysis failed: {str(e)}")
+        print(f"Error: {e}")
+        raise HTTPException(status_code=500, detail="Analysis failed.")
 
-# --- SUBSCRIPTION UPGRADE ---
 @app.post("/api/subscription/upgrade")
-async def upgrade_subscription(
-    request: UpgradeRequest,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
+async def upgrade_subscription(request: UpgradeRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     plan = request.plan_name.lower()
-    if plan not in ["pro", "elite"]:
-        raise HTTPException(status_code=400, detail="Invalid plan name.")
+    if plan not in ["pro", "elite"]: raise HTTPException(status_code=400, detail="Invalid plan name.")
     current_user.is_premium = True
     current_user.plan_type = plan
     db.commit()
     return {"message": f"Successfully upgraded to {plan}!", "is_premium": True, "plan_type": plan}
 
-# --- AVATAR UPLOAD ---
 @app.post("/api/user/avatar")
-async def upload_avatar(
-    file: UploadFile = File(...),
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
+async def upload_avatar(file: UploadFile = File(...), current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     allowed_types = ["image/jpeg", "image/png", "image/jpg"]
-    if file.content_type not in allowed_types:
-        raise HTTPException(status_code=400, detail="Only JPG and PNG images allowed")
+    if file.content_type not in allowed_types: raise HTTPException(status_code=400, detail="Only JPG and PNG images allowed")
     contents = await file.read()
-    if len(contents) > 2 * 1024 * 1024:
-        raise HTTPException(status_code=400, detail="File size must be less than 2MB")
+    if len(contents) > 2 * 1024 * 1024: raise HTTPException(status_code=400, detail="File size must be less than 2MB")
     upload_dir = Path("uploads/avatars")
     upload_dir.mkdir(parents=True, exist_ok=True)
     file_path = upload_dir / f"{current_user.id}_{file.filename}"
-    with open(file_path, "wb") as buffer:
-        buffer.write(contents)
+    with open(file_path, "wb") as buffer: buffer.write(contents)
     avatar_url = f"/uploads/avatars/{current_user.id}_{file.filename}"
     current_user.avatar_url = avatar_url
     db.commit()
