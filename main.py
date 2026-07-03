@@ -199,15 +199,18 @@ async def get_current_user_profile(current_user: User = Depends(get_current_user
         "last_login": current_user.last_login
     }
 
-# --- GAMEPLAY ANALYSIS (Premium Feature) ---
+# --- GAMEPLAY ANALYSIS (Elite-Only Hero Selection) ---
 @app.post("/api/gameplay/analyze")
 async def analyze_gameplay(request: AnalyzeRequest, current_user: User = Depends(get_current_user)):
-    """Analyze gameplay. Hero selection is Premium only."""
-    if request.hero_name and not current_user.is_premium:
-        raise HTTPException(
-            status_code=403, 
-            detail="Selecting a specific hero is a Premium feature. Please upgrade your subscription."
-        )
+    """Analyze gameplay. Hero selection is ELITE only (not Pro)."""
+    # Check if user is trying to use hero-specific analysis
+    if request.hero_name and request.hero_name.lower() != "null":
+        # Only Elite users can use hero selection
+        if current_user.plan_type != "elite":
+            raise HTTPException(
+                status_code=403,
+                detail="Hero-specific analysis is an Elite-exclusive feature. Please upgrade to Elite plan."
+            )
     
     focus_text = f"focusing specifically on {request.hero_name}" if request.hero_name else "analyzing overall gameplay"
     return {
@@ -219,7 +222,7 @@ async def analyze_gameplay(request: AnalyzeRequest, current_user: User = Depends
         "status": "processing video..."
     }
 
-# --- VIDEO UPLOAD ENDPOINT ---
+# --- VIDEO UPLOAD ENDPOINT (Elite-Only Hero Selection) ---
 @app.post("/api/gameplay/upload")
 async def upload_gameplay(
     file: UploadFile = File(...),
@@ -227,7 +230,7 @@ async def upload_gameplay(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Upload MLBB match replay for AI analysis"""
+    """Upload MLBB match replay for AI analysis. Hero selection is ELITE only."""
     
     # Validate file type
     allowed_types = ["video/mp4", "video/quicktime", "video/x-msvideo"]
@@ -239,11 +242,11 @@ async def upload_gameplay(
     if len(contents) > 500 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="File size must be less than 500MB")
     
-    # Check if user is premium for hero selection
-    if hero_name and hero_name.lower() != "null" and not current_user.is_premium:
+    # Check if user is Elite for hero selection (Pro users cannot use this feature)
+    if hero_name and hero_name.lower() != "null" and current_user.plan_type != "elite":
         raise HTTPException(
             status_code=403,
-            detail="Hero-specific analysis is an Elite feature. Please upgrade your subscription."
+            detail="Hero-specific analysis is an Elite-exclusive feature. Please upgrade to Elite plan."
         )
     
     # Create uploads directory
