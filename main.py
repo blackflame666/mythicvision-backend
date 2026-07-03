@@ -1,15 +1,18 @@
 import os
-from fastapi import FastAPI, Request, HTTPException, Depends
-from fastapi.responses import RedirectResponse, JSONResponse
+import shutil
+from pathlib import Path
+from fastapi import FastAPI, Request, HTTPException, Depends, UploadFile, File
+from fastapi.responses import RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 from authlib.integrations.starlette_client import OAuth
 from jose import jwt, JWTError
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
-from sqlalchemy import create_engine, Column, Integer, String, DateTime
+from sqlalchemy import create_engine, Column, Integer, String, DateTime, Boolean
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
+from pydantic import BaseModel
 import uvicorn
 
 # Load environment variables
@@ -29,8 +32,9 @@ class User(Base):
     id = Column(Integer, primary_key=True, index=True)
     email = Column(String, unique=True, index=True, nullable=False)
     name = Column(String)
-    avatar_url = Column(String)
+    avatar_url = Column(String, nullable=True)
     google_id = Column(String, unique=True)
+    is_premium = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     last_login = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -53,19 +57,19 @@ ALGORITHM = "HS256"
 # 1. CORS Middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allow all for testing, restrict later
+    allow_origins=["*"],  # Restrict to your domains in production
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# 2. Session Middleware (CRITICAL FIX FOR CSRF STATE MISMATCH)
+# 2. Session Middleware (CRITICAL for OAuth state/CSRF protection)
 app.add_middleware(
     SessionMiddleware,
     secret_key=SECRET_KEY,
-    https_only=False,  # Must be False to prevent cookie dropping on redirects
-    same_site="lax",   # Lax allows cookies on top-level GET navigations
-    max_age=3600       # Session expires after 1 hour
+    https_only=False,
+    same_site="lax",
+    max_age=3600
 )
 
 # --- GOOGLE OAUTH SETUP ---
@@ -80,6 +84,13 @@ oauth.register(
     },
 )
 
+# --- PYDANTIC MODELS ---
+class AnalyzeRequest(BaseModel):
+    hero_name: str = None
+
+class UpgradeRequest(BaseModel):
+    plan_name: str  # "pro" or "elite"
+
 # --- HELPER FUNCTIONS ---
 def create_access_token(data: dict, expires_delta: timedelta = None):
     to_encode = data.copy()
@@ -88,8 +99,7 @@ def create_access_token(data: dict, expires_delta: timedelta = None):
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
 async def get_current_user(request: Request, db: Session = Depends(get_db)):
-    token = request.headers.get("Authorization") or request.cookies.get("access_token")
-    
+    token = request.headers.get("Authorization")
     if not token:
         raise HTTPException(status_code=401, detail="Not authenticated")
     
@@ -113,16 +123,11 @@ async def get_current_user(request: Request, db: Session = Depends(get_db)):
 
 @app.get("/")
 def root():
-    return {
-        "message": "MythicVision API is running!",
-        "docs": "/docs",
-        "login": "/auth/google/login"
-    }
+    return {"message": "MythicVision API is running!", "docs": "/docs"}
 
 @app.get("/auth/google/login")
 async def google_login(request: Request):
     """Step 1: Redirect user to Google for authentication"""
-    # HARDCODE the HTTPS redirect URI to prevent state mismatch errors
     redirect_uri = f"{API_URL}/auth/google/callback"
     return await oauth.google.authorize_redirect(request, redirect_uri)
 
@@ -130,29 +135,21 @@ async def google_login(request: Request):
 async def google_callback(request: Request, db: Session = Depends(get_db)):
     """Step 2: Google redirects back here with user info"""
     try:
-        # Authorize access token (this validates the state parameter)
         token = await oauth.google.authorize_access_token(request)
-        
         if not token:
-            raise HTTPException(status_code=400, detail="Failed to get access token from Google")
+            raise HTTPException(status_code=400, detail="Failed to get access token")
         
-        # Get user info from the token
         user_info = token.get('userinfo')
-        
         if not user_info:
-            # Try to fetch userinfo if not in token
             resp = await oauth.google.get('https://www.googleapis.com/oauth2/v3/userinfo', token=token)
             user_info = resp.json()
         
-        if not user_info:
-            raise HTTPException(status_code=400, detail="Failed to get user info from Google")
-
         email = user_info.get('email')
         name = user_info.get('name')
         avatar = user_info.get('picture')
         google_id = user_info.get('sub')
 
-        # Check if user exists in DB, if not, create them
+        # Check if user exists, create if new
         db_user = db.query(User).filter(User.email == email).first()
         if not db_user:
             db_user = User(email=email, name=name, avatar_url=avatar, google_id=google_id)
@@ -160,17 +157,12 @@ async def google_callback(request: Request, db: Session = Depends(get_db)):
             db.commit()
             db.refresh(db_user)
         else:
-            # Update last login time
             db_user.last_login = datetime.utcnow()
             db.commit()
 
         # Generate JWT Token
-        token_data = {"sub": email, "user_id": db_user.id, "name": db_user.name}
-        access_token = create_access_token(data=token_data)
-
-        # Redirect back to Frontend Dashboard with the token in the URL
+        access_token = create_access_token(data={"sub": email, "user_id": db_user.id, "name": db_user.name})
         return RedirectResponse(url=f"{FRONTEND_URL}/dashboard?token={access_token}")
-
     except Exception as e:
         print(f"Auth Error: {e}")
         raise HTTPException(status_code=400, detail=f"Authentication failed: {str(e)}")
@@ -183,22 +175,82 @@ async def get_current_user_profile(current_user: User = Depends(get_current_user
         "email": current_user.email,
         "name": current_user.name,
         "avatar_url": current_user.avatar_url,
+        "is_premium": current_user.is_premium,
         "created_at": current_user.created_at,
         "last_login": current_user.last_login
     }
 
+# --- GAMEPLAY ANALYSIS (Premium Feature) ---
 @app.post("/api/gameplay/analyze")
-async def analyze_gameplay(current_user: User = Depends(get_current_user)):
-    """Protected route: Analyze gameplay (Placeholder for future AI logic)"""
+async def analyze_gameplay(request: AnalyzeRequest, current_user: User = Depends(get_current_user)):
+    """Analyze gameplay. Hero selection is Premium only."""
+    if request.hero_name and not current_user.is_premium:
+        raise HTTPException(
+            status_code=403, 
+            detail="Selecting a specific hero is a Premium feature. Please upgrade your subscription."
+        )
+    
+    focus_text = f"focusing specifically on {request.hero_name}" if request.hero_name else "analyzing overall gameplay"
     return {
-        "message": "Gameplay analysis endpoint ready",
+        "message": "Analysis started",
         "user": current_user.name,
-        "status": "awaiting video upload"
+        "is_premium": current_user.is_premium,
+        "analysis_focus": focus_text,
+        "status": "processing video..."
     }
+
+# --- SUBSCRIPTION UPGRADE (PayPal Integration) ---
+@app.post("/api/subscription/upgrade")
+async def upgrade_subscription(
+    request: UpgradeRequest, 
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Called by frontend after successful PayPal payment"""
+    current_user.is_premium = True
+    db.commit()
+    
+    return {
+        "message": f"Successfully upgraded to {request.plan_name}!",
+        "is_premium": True,
+        "plan": request.plan_name
+    }
+
+# --- AVATAR UPLOAD ---
+@app.post("/api/user/avatar")
+async def upload_avatar(
+    file: UploadFile = File(...), 
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Upload custom avatar image"""
+    allowed_types = ["image/jpeg", "image/png", "image/jpg"]
+    if file.content_type not in allowed_types:
+        raise HTTPException(status_code=400, detail="Only JPG and PNG images allowed")
+    
+    # Check file size (2MB max)
+    contents = await file.read()
+    if len(contents) > 2 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="File size must be less than 2MB")
+    
+    # Create uploads directory
+    upload_dir = Path("uploads/avatars")
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Save file
+    file_path = upload_dir / f"{current_user.id}_{file.filename}"
+    with open(file_path, "wb") as buffer:
+        buffer.write(contents)
+    
+    # Update user avatar URL
+    avatar_url = f"/uploads/avatars/{current_user.id}_{file.filename}"
+    current_user.avatar_url = avatar_url
+    db.commit()
+    
+    return {"avatar_url": avatar_url, "message": "Avatar updated successfully"}
 
 @app.get("/api/health")
 async def health_check():
-    """Health check endpoint"""
     return {"status": "healthy", "service": "mythicvision-backend"}
 
 # --- SERVER STARTUP (Required for Render) ---
