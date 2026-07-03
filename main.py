@@ -137,12 +137,11 @@ async def get_current_user_profile(current_user: User = Depends(get_current_user
         "last_login": current_user.last_login
     }
 
-# --- ROLE-SPECIFIC AI ANALYSIS ---
 @app.post("/api/gameplay/analyze-screenshot")
 async def analyze_screenshot(
     file: UploadFile = File(...),
     player_name: str = Form(...),
-    role: str = Form(...),  # Tank, Mage, Assassin, Fighter, Core, Support, Marksman
+    role: str = Form(...),
     current_user: User = Depends(get_current_user)
 ):
     if not file.content_type or "image" not in file.content_type:
@@ -154,58 +153,49 @@ async def analyze_screenshot(
     
     base64_image = base64.b64encode(contents).decode('utf-8')
 
-    # Role-specific coaching guidelines
     role_guidelines = {
-        "Tank": "As a Tank, your job is to initiate fights, protect carries, and absorb damage. You should have high assists, low deaths, and defensive items. Map rotation is critical - you must be first to objectives.",
-        "Mage": "As a Mage, your job is to deal burst magic damage, control lanes, and secure picks. You should have high kills, good gold income, and magic penetration items. Positioning is critical - stay behind tanks.",
-        "Assassin": "As an Assassin, your job is to eliminate enemy carries and secure kills. You should have high kills, good gold income, and damage items. Map awareness is critical - look for isolated targets.",
-        "Fighter": "As a Fighter, your job is to split push, duel enemies, and deal sustained damage. You should have balanced KDA, good gold, and hybrid items. Split pushing timing is critical.",
-        "Core": "As a Core/Jungler, your job is to farm efficiently, secure objectives (Turtle/Lord), and gank lanes. You should have the highest gold on team, good KDA, and damage items. Farming efficiency is critical.",
-        "Support": "As a Support, your job is to heal/shield carries, provide vision, and set up kills. You should have high assists, low deaths, and utility items. Vision control is critical.",
-        "Marksman": "As a Marksman, your job is to farm safely early, deal sustained physical damage late game, and secure objectives. You should have high gold, good KDA, and attack items. Positioning is critical - never die."
-    }
-
-    role_meta_advice = {
-        "Tank": "Current Meta Tanks: Tigreal, Atlas, Khufra. Meta builds focus on cooldown reduction and crowd control. Roam early, secure vision, and initiate team fights.",
-        "Mage": "Current Meta Mages: Valentina, Yve, Pharsa. Meta builds focus on magic penetration and cooldown reduction. Control mid lane, rotate to side lanes, and burst enemies.",
-        "Assassin": "Current Meta Assassins: Ling, Fanny, Hayabusa. Meta builds focus on critical chance and physical penetration. Farm jungle efficiently, look for picks, and eliminate carries.",
-        "Fighter": "Current Meta Fighters: Yu Zhong, Paquito, Julian. Meta builds focus on hybrid damage and sustain. Split push when team is grouped, duel enemies, and pressure lanes.",
-        "Core": "Current Meta Cores: Ling, Lancelot, Natalia. Meta builds focus on damage and mobility. Farm efficiently, secure Turtle/Lord, and gank overextended enemies.",
-        "Support": "Current Meta Supports: Rafaela, Estes, Diggie. Meta builds focus on healing/shielding and cooldown reduction. Stay with carries, provide vision, and set up kills.",
-        "Marksman": "Current Meta Marksmen: Brody, Wanwan, Beatrix. Meta builds focus on attack speed and critical damage. Farm safely early, position well in fights, and push towers."
+        "Tank": "As a Tank, your job is to initiate fights, protect carries, and absorb damage. You should have high assists, low deaths, and defensive items.",
+        "Mage": "As a Mage, your job is to deal burst magic damage, control lanes, and secure picks. You should have high kills and magic penetration items.",
+        "Assassin": "As an Assassin, your job is to eliminate enemy carries and secure kills. You should have high kills and damage items.",
+        "Fighter": "As a Fighter, your job is to split push, duel enemies, and deal sustained damage. You should have balanced KDA and hybrid items.",
+        "Core": "As a Core/Jungler, your job is to farm efficiently, secure objectives, and gank lanes. You should have the highest gold on team.",
+        "Support": "As a Support, your job is to heal/shield carries, provide vision, and set up kills. You should have high assists and utility items.",
+        "Marksman": "As a Marksman, your job is to farm safely early, deal sustained damage late game. You should have high gold and attack items."
     }
 
     guideline = role_guidelines.get(role, "Play your role effectively.")
-    meta_advice = role_meta_advice.get(role, "Follow current meta builds.")
 
-    system_prompt = f"""You are the world's greatest Mobile Legends: Bang Bang Esports Coach specializing in {role} role analysis.
-    
-    RULES:
-    1. NEVER use "N/A", "Data not available", or empty strings. Every field must have detailed content.
-    2. If you cannot identify the hero from the portrait, refer to the player by their username only.
-    3. If you cannot find the player name on the scoreboard, return ONLY: {{"error": "Player not found", "message": "The name '{player_name}' does not appear on this scoreboard."}}
-    4. Analyze based on {role} role expectations: {guideline}
-    5. Write EXTREMELY detailed analysis - minimum 400 words per section.
-    6. Include current meta advice: {meta_advice}"""
+    system_prompt = f"""You are the world's greatest Mobile Legends: Bang Bang Esports Coach.
+
+CRITICAL RULES:
+1. NEVER use "N/A", "Data not available", or empty strings. Every field MUST have detailed content.
+2. DURATION: Look at the TOP RIGHT of the scoreboard. It says "Duration XX:XX". Extract this EXACTLY.
+3. RESULT: Look at the TOP CENTER. It says "VICTORY" or "DEFEAT" in large text. Extract this EXACTLY.
+4. HERO: If you can identify the hero portrait next to "{player_name}", name it. Otherwise use "Unknown {role} Hero".
+5. If you cannot find "{player_name}" on the scoreboard, return ONLY: {{"error": "Player not found", "message": "The name '{player_name}' does not appear on this scoreboard."}}
+6. Write EXTREMELY detailed analysis - minimum 400 words per section.
+7. Analyze based on {role} role: {guideline}"""
 
     user_prompt = f"""Analyze this Mobile Legends scoreboard for player: "{player_name}" who played {role} role.
 
-CRITICAL: Find "{player_name}" by reading usernames. Extract: KDA, Gold, all 6 Items, Score/Rating, Win/Loss, Duration.
+CRITICAL EXTRACTION:
+- Look at TOP RIGHT for "Duration XX:XX" - extract the exact time
+- Look at TOP CENTER for "VICTORY" or "DEFEAT" - extract the result
+- Find "{player_name}" by reading usernames next to hero portraits
+- Extract their KDA (Kills/Deaths/Assists), Gold, all 6 Items, Score/Rating
 
-Provide MASSIVE detailed analysis based on {role} role expectations.
-
-Return ONLY valid JSON:
+Return ONLY valid JSON with this EXACT structure:
 {{
     "match_summary": "Victory/Defeat | Duration: XX:XX | KDA: X/X/X | Gold: XXXX",
-    "overall_rating": "X.X/10 - Detailed summary",
-    "duration": "XX:XX",
-    "result": "Victory/Defeat",
-    "hero_played": "Hero Name or 'Unknown {role} Hero'",
+    "overall_rating": "X.X/10 - Detailed 1-sentence summary",
+    "duration": "XX:XX (extract from top right of image)",
+    "result": "Victory or Defeat (extract from top center of image)",
+    "hero_played": "{role} (User selected {role} role)",
     "role_analysis": {{
         "title": "{role} Role Performance Analysis",
         "role_expectations": "{guideline}",
         "performance_score": "XX/100",
-        "detailed_analysis": "Write 5-6 LONG paragraphs (600+ words) analyzing: 1) Did they fulfill their {role} role responsibilities? 2) KDA analysis - is it appropriate for a {role}? 3) Gold efficiency - did they farm enough for their role? 4) Score/rating compared to teammates in similar roles. 5) Item build appropriateness for {role}. 6) Overall impact on the game. Cite specific numbers from the screenshot.",
+        "detailed_analysis": "Write 5-6 LONG paragraphs (600+ words) analyzing: 1) Did they fulfill their {role} role responsibilities? 2) KDA analysis - is it appropriate for a {role}? 3) Gold efficiency - did they farm enough for their role? 4) Score/rating compared to teammates. 5) Item build appropriateness for {role}. 6) Overall impact on the game. Cite specific numbers.",
         "strengths": [
             "Detailed strength #1 with evidence (2-3 sentences)",
             "Detailed strength #2 with evidence (2-3 sentences)",
@@ -221,27 +211,27 @@ Return ONLY valid JSON:
             "Detailed weakness #5 with evidence (2-3 sentences)"
         ],
         "actionable_tips": [
-            "Specific {role} tip #1 with exact practice method (2-3 sentences)",
-            "Specific {role} tip #2 with exact practice method (2-3 sentences)",
-            "Specific {role} tip #3 with exact practice method (2-3 sentences)",
-            "Specific {role} tip #4 with exact practice method (2-3 sentences)",
-            "Specific {role} tip #5 with exact practice method (2-3 sentences)"
+            "Specific {role} tip #1 (2-3 sentences)",
+            "Specific {role} tip #2 (2-3 sentences)",
+            "Specific {role} tip #3 (2-3 sentences)",
+            "Specific {role} tip #4 (2-3 sentences)",
+            "Specific {role} tip #5 (2-3 sentences)"
         ]
     }},
     "mistakes_corrections": {{
         "title": "Critical Mistakes & Corrections",
         "critical_errors": [
             {{
-                "mistake": "Specific mistake #1 for a {role} player (2-3 sentences)",
-                "evidence": "Concrete evidence from screenshot with numbers (2-3 sentences)",
-                "correction": "Detailed correction with specific in-game examples (4-5 sentences)",
-                "analysis": "Why this mistake is especially bad for a {role} player (2-3 sentences)"
+                "mistake": "Specific mistake #1 (2-3 sentences)",
+                "evidence": "Concrete evidence with numbers (2-3 sentences)",
+                "correction": "Detailed correction (4-5 sentences)",
+                "analysis": "Why this is bad for {role} (2-3 sentences)"
             }},
             {{
                 "mistake": "Specific mistake #2 (2-3 sentences)",
-                "evidence": "Evidence with numbers (2-3 sentences)",
-                "correction": "Detailed correction (4-5 sentences)",
-                "analysis": "Why this is bad for {role} (2-3 sentences)"
+                "evidence": "Evidence (2-3 sentences)",
+                "correction": "Correction (4-5 sentences)",
+                "analysis": "Analysis (2-3 sentences)"
             }},
             {{
                 "mistake": "Specific mistake #3 (2-3 sentences)",
@@ -261,33 +251,33 @@ Return ONLY valid JSON:
         "title": "Itemization & Macro Strategy",
         "overall_score": "XX/100",
         "items_built": ["Item 1", "Item 2", "Item 3", "Item 4", "Item 5", "Item 6"],
-        "detailed_analysis": "Write 5-6 LONG paragraphs (600+ words) analyzing: 1) Is this build optimal for {role}? 2) Do items counter the enemy team? 3) Item timing - were core items finished on time? 4) Missing key items for {role}. 5) Specific item swaps that would improve performance. 6) Comparison to pro {role} builds. Name exact items and explain why.",
-        "macro_assessment": "Write 4-5 paragraphs (400+ words) analyzing: 1) Gold efficiency for {role}. 2) Did they farm enough? 3) Objective control based on duration/result. 4) Map awareness and rotation patterns. 5) What to prioritize in future games.",
+        "detailed_analysis": "Write 5-6 LONG paragraphs (600+ words) analyzing: 1) Is this build optimal for {role}? 2) Do items counter the enemy team? 3) Item timing. 4) Missing key items. 5) Specific item swaps. 6) Comparison to pro builds. Name exact items.",
+        "macro_assessment": "Write 4-5 paragraphs (400+ words) analyzing: 1) Gold efficiency for {role}. 2) Did they farm enough? 3) Objective control. 4) Map awareness. 5) What to prioritize.",
         "actionable_tips": [
-            "Specific item tip #1 for {role} (2-3 sentences)",
-            "Specific item tip #2 for {role} (2-3 sentences)",
-            "Specific macro tip #3 (2-3 sentences)",
-            "Specific macro tip #4 (2-3 sentences)",
-            "Specific macro tip #5 (2-3 sentences)"
+            "Item tip #1 (2-3 sentences)",
+            "Item tip #2 (2-3 sentences)",
+            "Macro tip #3 (2-3 sentences)",
+            "Macro tip #4 (2-3 sentences)",
+            "Macro tip #5 (2-3 sentences)"
         ]
     }},
     "meta_recommendations": {{
         "title": "Current Meta Advice for {role}",
-        "meta_heroes": "List 3-5 current meta {role} heroes and why they're strong (4-5 sentences)",
-        "meta_builds": "Describe the current meta build path for {role} heroes (4-5 sentences)",
-        "meta_strategy": "Explain current meta strategy for {role} players - when to rotate, when to fight, when to farm (5-6 sentences)",
-        "meta_items": "List 3-4 must-have meta items for {role} and when to build them (4-5 sentences)",
-        "rank_up_tips": "Specific tips to climb ranks playing {role} in current meta (5-6 sentences)"
+        "meta_heroes": "List 3-5 current meta {role} heroes and why (4-5 sentences)",
+        "meta_builds": "Describe current meta build path for {role} (4-5 sentences)",
+        "meta_strategy": "Explain current meta strategy for {role} (5-6 sentences)",
+        "meta_items": "List 3-4 must-have meta items for {role} (4-5 sentences)",
+        "rank_up_tips": "Specific tips to climb ranks playing {role} (5-6 sentences)"
     }},
     "overall_recommendations": {{
-        "priority_1": "The #1 thing to fix (3-4 detailed sentences)",
+        "priority_1": "The #1 thing to fix (3-4 sentences)",
         "priority_2": "The #2 thing (3-4 sentences)",
         "priority_3": "The #3 thing (3-4 sentences)",
-        "long_term_goal": "What rank they can reach with timeline and milestones (4-5 sentences)"
+        "long_term_goal": "What rank they can reach (4-5 sentences)"
     }}
 }}
 
-REMEMBER: Every field must be filled with substantial content. NO EMPTY STRINGS. NO N/A. This is a professional coaching report."""
+REMEMBER: Extract Duration from top right (e.g., "16:34"). Extract Result from top center (VICTORY/DEFEAT). Every field must be filled. NO EMPTY STRINGS."""
 
     try:
         response = client.chat.completions.create(
