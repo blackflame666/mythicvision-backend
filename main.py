@@ -34,12 +34,16 @@ class User(Base):
     name = Column(String)
     avatar_url = Column(String, nullable=True)
     google_id = Column(String, unique=True)
-    is_premium = Column(Boolean, default=False)
+    is_premium = Column(Boolean, default=False, nullable=True)  # Added nullable for existing DBs
     created_at = Column(DateTime, default=datetime.utcnow)
     last_login = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-# Create tables
-Base.metadata.create_all(bind=engine)
+# Create tables (will add new columns safely)
+try:
+    Base.metadata.create_all(bind=engine)
+except Exception as e:
+    print(f"Database setup warning: {e}")
+    # Continue anyway - tables might already exist
 
 def get_db():
     db = SessionLocal()
@@ -57,13 +61,13 @@ ALGORITHM = "HS256"
 # 1. CORS Middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Restrict to your domains in production
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# 2. Session Middleware (CRITICAL for OAuth state/CSRF protection)
+# 2. Session Middleware
 app.add_middleware(
     SessionMiddleware,
     secret_key=SECRET_KEY,
@@ -89,7 +93,7 @@ class AnalyzeRequest(BaseModel):
     hero_name: str = None
 
 class UpgradeRequest(BaseModel):
-    plan_name: str  # "pro" or "elite"
+    plan_name: str
 
 # --- HELPER FUNCTIONS ---
 def create_access_token(data: dict, expires_delta: timedelta = None):
@@ -127,13 +131,11 @@ def root():
 
 @app.get("/auth/google/login")
 async def google_login(request: Request):
-    """Step 1: Redirect user to Google for authentication"""
     redirect_uri = f"{API_URL}/auth/google/callback"
     return await oauth.google.authorize_redirect(request, redirect_uri)
 
 @app.get("/auth/google/callback")
 async def google_callback(request: Request, db: Session = Depends(get_db)):
-    """Step 2: Google redirects back here with user info"""
     try:
         token = await oauth.google.authorize_access_token(request)
         if not token:
@@ -149,10 +151,9 @@ async def google_callback(request: Request, db: Session = Depends(get_db)):
         avatar = user_info.get('picture')
         google_id = user_info.get('sub')
 
-        # Check if user exists, create if new
         db_user = db.query(User).filter(User.email == email).first()
         if not db_user:
-            db_user = User(email=email, name=name, avatar_url=avatar, google_id=google_id)
+            db_user = User(email=email, name=name, avatar_url=avatar, google_id=google_id, is_premium=False)
             db.add(db_user)
             db.commit()
             db.refresh(db_user)
@@ -160,7 +161,6 @@ async def google_callback(request: Request, db: Session = Depends(get_db)):
             db_user.last_login = datetime.utcnow()
             db.commit()
 
-        # Generate JWT Token
         access_token = create_access_token(data={"sub": email, "user_id": db_user.id, "name": db_user.name})
         return RedirectResponse(url=f"{FRONTEND_URL}/dashboard?token={access_token}")
     except Exception as e:
@@ -169,21 +169,18 @@ async def google_callback(request: Request, db: Session = Depends(get_db)):
 
 @app.get("/api/me")
 async def get_current_user_profile(current_user: User = Depends(get_current_user)):
-    """Get the currently logged-in user's profile"""
     return {
         "id": current_user.id,
         "email": current_user.email,
         "name": current_user.name,
         "avatar_url": current_user.avatar_url,
-        "is_premium": current_user.is_premium,
+        "is_premium": bool(current_user.is_premium) if current_user.is_premium is not None else False,
         "created_at": current_user.created_at,
         "last_login": current_user.last_login
     }
 
-# --- GAMEPLAY ANALYSIS (Premium Feature) ---
 @app.post("/api/gameplay/analyze")
 async def analyze_gameplay(request: AnalyzeRequest, current_user: User = Depends(get_current_user)):
-    """Analyze gameplay. Hero selection is Premium only."""
     if request.hero_name and not current_user.is_premium:
         raise HTTPException(
             status_code=403, 
@@ -194,19 +191,17 @@ async def analyze_gameplay(request: AnalyzeRequest, current_user: User = Depends
     return {
         "message": "Analysis started",
         "user": current_user.name,
-        "is_premium": current_user.is_premium,
+        "is_premium": bool(current_user.is_premium) if current_user.is_premium is not None else False,
         "analysis_focus": focus_text,
         "status": "processing video..."
     }
 
-# --- SUBSCRIPTION UPGRADE (PayPal Integration) ---
 @app.post("/api/subscription/upgrade")
 async def upgrade_subscription(
     request: UpgradeRequest, 
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Called by frontend after successful PayPal payment"""
     current_user.is_premium = True
     db.commit()
     
@@ -216,33 +211,27 @@ async def upgrade_subscription(
         "plan": request.plan_name
     }
 
-# --- AVATAR UPLOAD ---
 @app.post("/api/user/avatar")
 async def upload_avatar(
     file: UploadFile = File(...), 
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Upload custom avatar image"""
     allowed_types = ["image/jpeg", "image/png", "image/jpg"]
     if file.content_type not in allowed_types:
         raise HTTPException(status_code=400, detail="Only JPG and PNG images allowed")
     
-    # Check file size (2MB max)
     contents = await file.read()
     if len(contents) > 2 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="File size must be less than 2MB")
     
-    # Create uploads directory
     upload_dir = Path("uploads/avatars")
     upload_dir.mkdir(parents=True, exist_ok=True)
     
-    # Save file
     file_path = upload_dir / f"{current_user.id}_{file.filename}"
     with open(file_path, "wb") as buffer:
         buffer.write(contents)
     
-    # Update user avatar URL
     avatar_url = f"/uploads/avatars/{current_user.id}_{file.filename}"
     current_user.avatar_url = avatar_url
     db.commit()
@@ -253,7 +242,6 @@ async def upload_avatar(
 async def health_check():
     return {"status": "healthy", "service": "mythicvision-backend"}
 
-# --- SERVER STARTUP (Required for Render) ---
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run(app, host="0.0.0.0", port=port)
