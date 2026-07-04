@@ -610,10 +610,14 @@ async def register_team(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Register a team for a tournament (Available to all logged-in users)"""
+    """Register a team for a tournament (CREATOR ONLY)"""
     tournament = db.query(Tournament).filter(Tournament.id == tournament_id).first()
     if not tournament:
         raise HTTPException(status_code=404, detail="Tournament not found")
+    
+    # CRITICAL CHECK: Only the tournament creator can register teams
+    if tournament.creator_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Only the tournament creator can register teams.")
     
     if tournament.status != "pending":
         raise HTTPException(status_code=400, detail="Tournament is no longer accepting registrations")
