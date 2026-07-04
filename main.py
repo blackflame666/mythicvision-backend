@@ -4,25 +4,26 @@ import re
 import base64
 from pathlib import Path
 from fastapi import FastAPI, Request, HTTPException, Depends, UploadFile, File, Form
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 from authlib.integrations.starlette_client import OAuth
 from jose import jwt, JWTError
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
-from sqlalchemy import create_engine, Column, Integer, String, DateTime, Boolean, text
+from sqlalchemy import create_engine, Column, Integer, String, DateTime, Boolean, text, ForeignKey
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, Session
+from sqlalchemy.orm import sessionmaker, Session, relationship
 from pydantic import BaseModel
 from openai import OpenAI
+from typing import Optional, List
 import uvicorn
 
 # Load environment variables
 load_dotenv()
 
 # --- APP INITIALIZATION ---
-app = FastAPI(title="MythicVision Backend - ML Coach")
+app = FastAPI(title="MythicVision Backend - ML Coach & Tournament")
 
 # --- OPENAI SETUP ---
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -36,6 +37,8 @@ engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
+# --- DATABASE MODELS ---
+
 class User(Base):
     __tablename__ = "users"
     id = Column(Integer, primary_key=True, index=True)
@@ -47,6 +50,56 @@ class User(Base):
     plan_type = Column(String, default="free")  # "free", "pro", or "elite"
     created_at = Column(DateTime, default=datetime.utcnow)
     last_login = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Relationships
+    tournaments = relationship("Tournament", back_populates="creator")
+
+class Tournament(Base):
+    __tablename__ = "tournaments"
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=False)
+    creator_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    max_teams = Column(Integer, default=8)  # 4, 8, 16, 32
+    status = Column(String, default="pending")  # pending, active, completed
+    created_at = Column(DateTime, default=datetime.utcnow)
+    start_date = Column(DateTime)
+    game_mode = Column(String)  # e.g., "5v5", "3v3"
+    description = Column(String, nullable=True)
+    
+    # Relationships
+    creator = relationship("User", back_populates="tournaments")
+    teams = relationship("TournamentTeam", back_populates="tournament", cascade="all, delete-orphan")
+    matches = relationship("TournamentMatch", back_populates="tournament", cascade="all, delete-orphan")
+
+class TournamentTeam(Base):
+    __tablename__ = "tournament_teams"
+    id = Column(Integer, primary_key=True, index=True)
+    tournament_id = Column(Integer, ForeignKey("tournaments.id"), nullable=False)
+    team_name = Column(String, nullable=False)
+    captain_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    player_ids = Column(String)  # JSON string of user IDs
+    seed = Column(Integer)  # Tournament seeding
+    logo_url = Column(String, nullable=True)
+    
+    # Relationships
+    tournament = relationship("Tournament", back_populates="teams")
+
+class TournamentMatch(Base):
+    __tablename__ = "tournament_matches"
+    id = Column(Integer, primary_key=True, index=True)
+    tournament_id = Column(Integer, ForeignKey("tournaments.id"), nullable=False)
+    round_number = Column(Integer)  # 1 = quarterfinal, 2 = semifinal, etc.
+    team1_id = Column(Integer, ForeignKey("tournament_teams.id"))
+    team2_id = Column(Integer, ForeignKey("tournament_teams.id"))
+    winner_id = Column(Integer, ForeignKey("tournament_teams.id"))
+    match_order = Column(Integer)  # Position in bracket
+    status = Column(String, default="pending")  # pending, completed, scheduled
+    scheduled_time = Column(DateTime)
+    team1_score = Column(Integer, default=0)
+    team2_score = Column(Integer, default=0)
+    
+    # Relationships
+    tournament = relationship("Tournament", back_populates="matches")
 
 # Create tables
 Base.metadata.create_all(bind=engine)
@@ -108,6 +161,23 @@ oauth.register(
 class UpgradeRequest(BaseModel):
     plan_name: str
 
+class TournamentCreateRequest(BaseModel):
+    name: str
+    max_teams: int
+    game_mode: str
+    start_date: datetime
+    description: Optional[str] = None
+
+class TeamRegisterRequest(BaseModel):
+    team_name: str
+    captain_id: int
+    player_ids: List[int]
+
+class MatchResultRequest(BaseModel):
+    winner_id: int
+    team1_score: int
+    team2_score: int
+
 # --- HELPER FUNCTIONS ---
 def create_access_token(data: dict, expires_delta: timedelta = None):
     to_encode = data.copy()
@@ -135,6 +205,48 @@ async def get_current_user(request: Request, db: Session = Depends(get_db)):
         return user
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid token")
+
+def generate_bracket_matches(tournament_id: int, num_teams: int, db: Session):
+    """Generate tournament bracket matches based on number of teams"""
+    teams = db.query(TournamentTeam).filter(TournamentTeam.tournament_id == tournament_id).all()
+    
+    # Calculate number of rounds
+    import math
+    num_rounds = int(math.log2(num_teams))
+    
+    # Create matches for each round
+    matches = []
+    
+    # Round 1 (Quarterfinals/Semifinals depending on size)
+    for i in range(0, len(teams), 2):
+        if i + 1 < len(teams):
+            match = TournamentMatch(
+                tournament_id=tournament_id,
+                round_number=1,
+                team1_id=teams[i].id,
+                team2_id=teams[i + 1].id,
+                match_order=i // 2,
+                status="pending"
+            )
+            matches.append(match)
+    
+    # Create empty slots for subsequent rounds
+    for round_num in range(2, num_rounds + 1):
+        matches_in_round = num_teams // (2 ** round_num)
+        for i in range(matches_in_round):
+            match = TournamentMatch(
+                tournament_id=tournament_id,
+                round_number=round_num,
+                team1_id=None,
+                team2_id=None,
+                match_order=i,
+                status="pending"
+            )
+            matches.append(match)
+    
+    db.add_all(matches)
+    db.commit()
+    return matches
 
 # --- ROUTES ---
 
@@ -370,20 +482,33 @@ Return ONLY valid JSON with this EXACT structure:
 
 REMEMBER: Extract Duration from top right (e.g., "16:34"). Extract Result from top center (VICTORY/DEFEAT). Every field must be filled. NO EMPTY STRINGS. NO N/A. Write extensive paragraphs."""
 
-    # 7. Call OpenAI API
+    # 7. Call OpenAI API with Retry Logic
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            response = client.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": [
+                        {"type": "text", "text": user_prompt},
+                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
+                    ]}
+                ],
+                max_tokens=3000
+            )
+            break  # If successful, break out of the retry loop
+            
+        except Exception as e:
+            print(f"OpenAI Attempt {attempt + 1} failed: {e}")
+            if attempt < max_retries - 1:
+                import time
+                time.sleep(3)  # Wait 3 seconds before retrying
+            else:
+                print(f"CRITICAL ANALYSIS ERROR after {max_retries} attempts: {e}")
+                raise HTTPException(status_code=500, detail="AI is temporarily busy. Please try again in a minute.")
+    
     try:
-        response = client.chat.completions.create(
-            model="gpt-4o",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": [
-                    {"type": "text", "text": user_prompt},
-                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
-                ]}
-            ],
-            max_tokens=4500
-        )
-        
         content = response.choices[0].message.content
         print("RAW AI RESPONSE LENGTH:", len(content))
         
@@ -413,6 +538,176 @@ REMEMBER: Extract Duration from top right (e.g., "16:34"). Extract Result from t
     except Exception as e:
         print(f"CRITICAL ANALYSIS ERROR: {e}")
         raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
+
+# --- TOURNAMENT ENDPOINTS (ELITE EXCLUSIVE) ---
+
+@app.post("/api/tournaments/create")
+async def create_tournament(
+    tournament_data: TournamentCreateRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Create a new tournament (ELITE EXCLUSIVE)"""
+    # STRICT CHECK: Only Elite users can create tournaments
+    if current_user.plan_type != "elite":
+        raise HTTPException(status_code=403, detail="Tournament creation is an Elite-exclusive feature. Please upgrade to Elite.")
+    
+    tournament = Tournament(
+        name=tournament_data.name,
+        creator_id=current_user.id,
+        max_teams=tournament_data.max_teams,
+        game_mode=tournament_data.game_mode,
+        start_date=tournament_data.start_date,
+        description=tournament_data.description,
+        status="pending"
+    )
+    
+    db.add(tournament)
+    db.commit()
+    db.refresh(tournament)
+    
+    return {
+        "message": "Tournament created successfully",
+        "tournament_id": tournament.id,
+        "tournament": tournament
+    }
+
+@app.get("/api/tournaments")
+async def get_user_tournaments(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get all tournaments created by user"""
+    tournaments = db.query(Tournament).filter(Tournament.creator_id == current_user.id).all()
+    return {"tournaments": tournaments}
+
+@app.get("/api/tournaments/{tournament_id}")
+async def get_tournament_bracket(
+    tournament_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get tournament details with bracket and teams (All authenticated users can view)"""
+    tournament = db.query(Tournament).filter(Tournament.id == tournament_id).first()
+    if not tournament:
+        raise HTTPException(status_code=404, detail="Tournament not found")
+    
+    teams = db.query(TournamentTeam).filter(TournamentTeam.tournament_id == tournament_id).all()
+    matches = db.query(TournamentMatch).filter(TournamentMatch.tournament_id == tournament_id).order_by(
+        TournamentMatch.round_number, TournamentMatch.match_order
+    ).all()
+    
+    return {
+        "tournament": tournament,
+        "teams": teams,
+        "matches": matches
+    }
+
+@app.post("/api/tournaments/{tournament_id}/register")
+async def register_team(
+    tournament_id: int,
+    team_data: TeamRegisterRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Register a team for a tournament (Available to all logged-in users)"""
+    tournament = db.query(Tournament).filter(Tournament.id == tournament_id).first()
+    if not tournament:
+        raise HTTPException(status_code=404, detail="Tournament not found")
+    
+    if tournament.status != "pending":
+        raise HTTPException(status_code=400, detail="Tournament is no longer accepting registrations")
+    
+    # Check if tournament is full
+    current_teams = db.query(TournamentTeam).filter(TournamentTeam.tournament_id == tournament_id).count()
+    if current_teams >= tournament.max_teams:
+        raise HTTPException(status_code=400, detail="Tournament is full")
+    
+    team = TournamentTeam(
+        tournament_id=tournament_id,
+        team_name=team_data.team_name,
+        captain_id=team_data.captain_id,
+        player_ids=json.dumps(team_data.player_ids),
+        seed=current_teams + 1
+    )
+    
+    db.add(team)
+    db.commit()
+    db.refresh(team)
+    
+    return {"message": "Team registered successfully", "team": team}
+
+@app.post("/api/tournaments/{tournament_id}/start")
+async def start_tournament(
+    tournament_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Start tournament and generate bracket (ELITE EXCLUSIVE)"""
+    tournament = db.query(Tournament).filter(Tournament.id == tournament_id).first()
+    if not tournament:
+        raise HTTPException(status_code=404, detail="Tournament not found")
+    
+    if tournament.creator_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Only tournament creator can start the tournament")
+    
+    # STRICT CHECK: Only Elite users can start/manage tournaments
+    if current_user.plan_type != "elite":
+        raise HTTPException(status_code=403, detail="Tournament management is an Elite-exclusive feature. Please upgrade to Elite.")
+    
+    if tournament.status != "pending":
+        raise HTTPException(status_code=400, detail="Tournament has already started")
+    
+    # Check if we have enough teams
+    num_teams = db.query(TournamentTeam).filter(TournamentTeam.tournament_id == tournament_id).count()
+    if num_teams < 2:
+        raise HTTPException(status_code=400, detail="Need at least 2 teams to start tournament")
+    
+    # Generate bracket matches
+    generate_bracket_matches(tournament_id, tournament.max_teams, db)
+    
+    tournament.status = "active"
+    db.commit()
+    
+    return {"message": "Tournament started successfully", "bracket_generated": True}
+
+@app.post("/api/tournaments/matches/{match_id}/result")
+async def submit_match_result(
+    match_id: int,
+    result_data: MatchResultRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Submit match result and advance winner"""
+    match = db.query(TournamentMatch).filter(TournamentMatch.id == match_id).first()
+    if not match:
+        raise HTTPException(status_code=404, detail="Match not found")
+    
+    # Update match result
+    match.winner_id = result_data.winner_id
+    match.team1_score = result_data.team1_score
+    match.team2_score = result_data.team2_score
+    match.status = "completed"
+    
+    # Advance winner to next round
+    if match.round_number < 3:  # Not the final
+        next_round_matches = db.query(TournamentMatch).filter(
+            TournamentMatch.tournament_id == match.tournament_id,
+            TournamentMatch.round_number == match.round_number + 1
+        ).all()
+        
+        # Find the next match for this winner
+        for next_match in next_round_matches:
+            if not next_match.team1_id:
+                next_match.team1_id = result_data.winner_id
+                break
+            elif not next_match.team2_id:
+                next_match.team2_id = result_data.winner_id
+                break
+    
+    db.commit()
+    
+    return {"message": "Match result submitted successfully"}
 
 # --- SUBSCRIPTION UPGRADE ---
 @app.post("/api/subscription/upgrade")
