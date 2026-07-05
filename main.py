@@ -765,8 +765,8 @@ async def admin_update_user(
     db: Session = Depends(get_db)
 ):
     """Grant or revoke Pro/Elite status (ADMIN ONLY)"""
-    # SECURITY CHECK: Only allow specific admin email
-    if current_user.email != "delram54@gmail.com" and not current_user.is_admin:
+    # SECURITY CHECK: Only allow specific admin email OR users with is_admin flag
+    if current_user.email != "delram540@gmail.com" and not current_user.is_admin:
         raise HTTPException(status_code=403, detail="Access denied. Admins only.")
     
     target_user = db.query(User).filter(User.email == request.user_email).first()
