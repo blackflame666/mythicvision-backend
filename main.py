@@ -117,6 +117,22 @@ with engine.connect() as conn:
         print(f"Columns already exist or migration completed: {e}")
         conn.rollback()
 
+# --- AUTO-PROMOTE ADMIN (Run once on deploy) ---
+with Session(engine) as db:
+    try:
+        admin_email = "delram540@gmail.com"
+        user = db.query(User).filter(User.email == admin_email).first()
+        if user and not user.is_admin:
+            user.is_admin = True
+            user.plan_type = "elite"
+            user.is_premium = True
+            user.subscription_end_date = datetime.utcnow() + timedelta(days=365) # 1 year free for you!
+            db.commit()
+            print(f"✅ AUTO-PROMOTED {admin_email} to Admin & Elite!")
+    except Exception as e:
+        print(f"Auto-promote skipped (user might not exist yet): {e}")
+# -------------------------------------------------
+
 def get_db():
     db = SessionLocal()
     try:
