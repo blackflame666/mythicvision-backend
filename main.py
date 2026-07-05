@@ -48,6 +48,8 @@ class User(Base):
     google_id = Column(String, unique=True)
     is_premium = Column(Boolean, default=False)
     plan_type = Column(String, default="free")  # "free", "pro", or "elite"
+    is_admin = Column(Boolean, default=False)  # Admin flag
+    subscription_end_date = Column(DateTime, nullable=True)  # 30-day timer
     created_at = Column(DateTime, default=datetime.utcnow)
     last_login = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
@@ -104,14 +106,15 @@ class TournamentMatch(Base):
 # Create tables
 Base.metadata.create_all(bind=engine)
 
-# Add plan_type column to existing users (database migration)
+# Database migration - add new columns to existing users table
 with engine.connect() as conn:
     try:
-        conn.execute(text("ALTER TABLE users ADD COLUMN plan_type VARCHAR DEFAULT 'free'"))
+        conn.execute(text("ALTER TABLE users ADD COLUMN is_admin BOOLEAN DEFAULT 0"))
+        conn.execute(text("ALTER TABLE users ADD COLUMN subscription_end_date DATETIME"))
         conn.commit()
-        print("Added plan_type column to users table")
+        print("Added admin and subscription columns to users table")
     except Exception as e:
-        print(f"plan_type column already exists or migration completed: {e}")
+        print(f"Columns already exist or migration completed: {e}")
         conn.rollback()
 
 def get_db():
@@ -178,6 +181,11 @@ class MatchResultRequest(BaseModel):
     team1_score: int
     team2_score: int
 
+class AdminUpdateRequest(BaseModel):
+    user_email: str
+    plan_type: str  # "free", "pro", "elite"
+    days: int = 30  # Default 30 days
+
 # --- HELPER FUNCTIONS ---
 def create_access_token(data: dict, expires_delta: timedelta = None):
     to_encode = data.copy()
@@ -202,6 +210,14 @@ async def get_current_user(request: Request, db: Session = Depends(get_db)):
         user = db.query(User).filter(User.email == email).first()
         if user is None:
             raise HTTPException(status_code=404, detail="User not found")
+        
+        # Check subscription expiry
+        if user.subscription_end_date and user.subscription_end_date < datetime.utcnow():
+            user.plan_type = "free"
+            user.is_premium = False
+            user.subscription_end_date = None
+            db.commit()
+        
         return user
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid token")
@@ -287,7 +303,8 @@ async def google_callback(request: Request, db: Session = Depends(get_db)):
                 avatar_url=avatar, 
                 google_id=google_id, 
                 is_premium=False,
-                plan_type="free"
+                plan_type="free",
+                is_admin=False
             )
             db.add(db_user)
             db.commit()
@@ -313,6 +330,8 @@ async def get_current_user_profile(current_user: User = Depends(get_current_user
         "avatar_url": current_user.avatar_url,
         "is_premium": current_user.is_premium or False,
         "plan_type": current_user.plan_type or "free",
+        "is_admin": current_user.is_admin or False,
+        "subscription_end_date": current_user.subscription_end_date,
         "created_at": current_user.created_at,
         "last_login": current_user.last_login
     }
@@ -728,12 +747,47 @@ async def upgrade_subscription(
     
     current_user.is_premium = True
     current_user.plan_type = plan
+    current_user.subscription_end_date = datetime.utcnow() + timedelta(days=30)
     db.commit()
     
     return {
-        "message": f"Successfully upgraded to {plan}!",
+        "message": f"Successfully upgraded to {plan} for 30 days!",
         "is_premium": True,
-        "plan_type": plan
+        "plan_type": plan,
+        "subscription_end_date": current_user.subscription_end_date
+    }
+
+# --- ADMIN PANEL ---
+@app.post("/api/admin/update-user")
+async def admin_update_user(
+    request: AdminUpdateRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Grant or revoke Pro/Elite status (ADMIN ONLY)"""
+    # SECURITY CHECK: Only allow specific admin email
+    if current_user.email != "delram54@gmail.com" and not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Access denied. Admins only.")
+    
+    target_user = db.query(User).filter(User.email == request.user_email).first()
+    if not target_user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Update Plan
+    target_user.plan_type = request.plan_type
+    target_user.is_premium = request.plan_type in ["pro", "elite"]
+    
+    # Update Expiry Date
+    if request.plan_type == "free":
+        target_user.subscription_end_date = None
+    else:
+        target_user.subscription_end_date = datetime.utcnow() + timedelta(days=request.days)
+    
+    db.commit()
+    
+    return {
+        "message": f"Successfully updated {target_user.email} to {request.plan_type} for {request.days} days.",
+        "new_expiry": target_user.subscription_end_date
     }
 
 # --- AVATAR UPLOAD ---
