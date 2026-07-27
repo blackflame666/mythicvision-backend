@@ -45,11 +45,12 @@ class User(Base):
     email = Column(String, unique=True, index=True, nullable=False)
     name = Column(String)
     avatar_url = Column(String, nullable=True)
-    google_id = Column(String, unique=True)
+    google_id = Column(String, unique=True, nullable=True)
     is_premium = Column(Boolean, default=False)
     plan_type = Column(String, default="free")  # "free", "pro", or "elite"
     is_admin = Column(Boolean, default=False)  # Admin flag
     subscription_end_date = Column(DateTime, nullable=True)  # 30-day timer
+    hashed_password = Column(String, nullable=True)  # For email/password auth
     created_at = Column(DateTime, default=datetime.utcnow)
     last_login = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
@@ -111,8 +112,9 @@ with engine.connect() as conn:
     try:
         conn.execute(text("ALTER TABLE users ADD COLUMN is_admin BOOLEAN DEFAULT 0"))
         conn.execute(text("ALTER TABLE users ADD COLUMN subscription_end_date DATETIME"))
+        conn.execute(text("ALTER TABLE users ADD COLUMN hashed_password VARCHAR"))
         conn.commit()
-        print("Added admin and subscription columns to users table")
+        print("Added admin, subscription, and password columns to users table")
     except Exception as e:
         print(f"Columns already exist or migration completed: {e}")
         conn.rollback()
@@ -179,6 +181,15 @@ oauth.register(
 # --- PYDANTIC MODELS ---
 class UpgradeRequest(BaseModel):
     plan_name: str
+
+class RegisterRequest(BaseModel):
+    name: str
+    email: str
+    password: str
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
 
 class TournamentCreateRequest(BaseModel):
     name: str
@@ -335,6 +346,96 @@ async def google_callback(request: Request, db: Session = Depends(get_db)):
     except Exception as e:
         print(f"Auth Error: {e}")
         raise HTTPException(status_code=400, detail=f"Authentication failed: {str(e)}")
+
+# --- EMAIL/PASSWORD AUTH ENDPOINTS ---
+@app.post("/api/auth/register")
+async def register_user(
+    request: RegisterRequest,
+    db: Session = Depends(get_db)
+):
+    """Register a new user with email and password"""
+    # Check if user already exists
+    existing_user = db.query(User).filter(User.email == request.email).first()
+    if existing_user:
+        raise HTTPException(status_code=400, detail="Email already registered")
+    
+    # Hash password
+    from passlib.context import CryptContext
+    pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+    hashed_password = pwd_context.hash(request.password)
+    
+    # Create new user
+    new_user = User(
+        email=request.email,
+        name=request.name,
+        google_id=None,  # Not using Google
+        avatar_url=None,
+        is_premium=False,
+        plan_type="free",
+        is_admin=False,
+        hashed_password=hashed_password
+    )
+    
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+    
+    # Generate JWT token
+    access_token = create_access_token(
+        data={"sub": new_user.email, "user_id": new_user.id, "name": new_user.name}
+    )
+    
+    return {
+        "message": "User created successfully",
+        "access_token": access_token,
+        "user": {
+            "id": new_user.id,
+            "email": new_user.email,
+            "name": new_user.name,
+            "plan_type": new_user.plan_type
+        }
+    }
+
+@app.post("/api/auth/login")
+async def login_user(
+    request: LoginRequest,
+    db: Session = Depends(get_db)
+):
+    """Login with email and password"""
+    user = db.query(User).filter(User.email == request.email).first()
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+    
+    # Check if user has a password (Google users won't)
+    if not user.hashed_password:
+        raise HTTPException(status_code=401, detail="Please login with Google for this account")
+    
+    # Verify password
+    from passlib.context import CryptContext
+    pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+    
+    if not pwd_context.verify(request.password, user.hashed_password):
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+    
+    # Update last login
+    user.last_login = datetime.utcnow()
+    db.commit()
+    
+    # Generate JWT token
+    access_token = create_access_token(
+        data={"sub": user.email, "user_id": user.id, "name": user.name}
+    )
+    
+    return {
+        "message": "Login successful",
+        "access_token": access_token,
+        "user": {
+            "id": user.id,
+            "email": user.email,
+            "name": user.name,
+            "plan_type": user.plan_type
+        }
+    }
 
 @app.get("/api/me")
 async def get_current_user_profile(current_user: User = Depends(get_current_user)):
@@ -787,7 +888,7 @@ async def admin_update_user(
     
     target_user = db.query(User).filter(User.email == request.user_email).first()
     if not target_user:
-        raise HTTPException(status_code=404, detail="User not found")
+        raise HTTPException(status_code=404, detail="User not found. They must log in first.")
     
     # Update Plan
     target_user.plan_type = request.plan_type
@@ -804,6 +905,34 @@ async def admin_update_user(
     return {
         "message": f"Successfully updated {target_user.email} to {request.plan_type} for {request.days} days.",
         "new_expiry": target_user.subscription_end_date
+    }
+
+@app.get("/api/admin/users")
+async def admin_list_users(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """List all users in the database (ADMIN ONLY)"""
+    # SECURITY CHECK
+    if current_user.email != "delram540@gmail.com" and not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Access denied. Admins only.")
+    
+    users = db.query(User).all()
+    
+    return {
+        "total_users": len(users),
+        "users": [
+            {
+                "id": user.id,
+                "email": user.email,
+                "name": user.name,
+                "plan_type": user.plan_type,
+                "is_admin": user.is_admin,
+                "subscription_end_date": str(user.subscription_end_date) if user.subscription_end_date else None,
+                "created_at": str(user.created_at)
+            }
+            for user in users
+        ]
     }
 
 # --- AVATAR UPLOAD ---
