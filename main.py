@@ -342,7 +342,11 @@ async def google_callback(request: Request, db: Session = Depends(get_db)):
 
         # Generate JWT Token
         access_token = create_access_token(data={"sub": email, "user_id": db_user.id, "name": db_user.name})
-        return RedirectResponse(url=f"{FRONTEND_URL}/dashboard?token={access_token}")
+        
+        # CRITICAL FIX: Redirect to /login WITH token parameter
+        redirect_url = f"{FRONTEND_URL}/login?token={access_token}"
+        print(f"✅ Redirecting to: {redirect_url}")
+        return RedirectResponse(url=redirect_url)
     except Exception as e:
         print(f"Auth Error: {e}")
         raise HTTPException(status_code=400, detail=f"Authentication failed: {str(e)}")
