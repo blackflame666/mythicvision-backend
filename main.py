@@ -375,16 +375,18 @@ async def register_user(
     pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
     hashed_password = pwd_context.hash(request.password)
     
-    # Create new user
+       # Create new user with AUTO-PROMOTE ADMIN FIX
+    is_admin = (request.email == "delram540@gmail.com")
     new_user = User(
         email=request.email,
         name=request.name,
-        google_id=None,  # Not using Google
+        google_id=None,
         avatar_url=None,
-        is_premium=False,
-        plan_type="free",
-        is_admin=False,
-        hashed_password=hashed_password
+        is_premium=is_admin,
+        plan_type="elite" if is_admin else "free",
+        is_admin=is_admin,
+        hashed_password=hashed_password,
+        subscription_end_date=datetime.utcnow() + timedelta(days=365) if is_admin else None
     )
     
     db.add(new_user)
@@ -421,12 +423,20 @@ async def login_user(
     if not user.hashed_password:
         raise HTTPException(status_code=401, detail="Please login with Google for this account")
     
-    # Verify password
+       # Verify password
     from passlib.context import CryptContext
     pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
     
     if not pwd_context.verify(request.password, user.hashed_password):
         raise HTTPException(status_code=401, detail="Invalid email or password")
+    
+    # AUTO-PROMOTE ADMIN FIX ON LOGIN
+    if user.email == "delram540@gmail.com":
+        user.is_admin = True
+        user.plan_type = "elite"
+        user.is_premium = True
+        user.subscription_end_date = datetime.utcnow() + timedelta(days=365)
+        db.commit()
     
     # Update last login
     user.last_login = datetime.utcnow()
