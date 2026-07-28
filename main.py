@@ -336,6 +336,9 @@ async def google_callback(request: Request, db: Session = Depends(get_db)):
                 is_admin=is_admin,
                 subscription_end_date=datetime.utcnow() + timedelta(days=365) if is_admin else None
             )
+            db.add(db_user)
+            db.commit()
+            db.refresh(db_user)
         else:
             # Ensure admin stays admin
             if email == "delram540@gmail.com":
@@ -375,7 +378,7 @@ async def register_user(
     pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
     hashed_password = pwd_context.hash(request.password)
     
-       # Create new user with AUTO-PROMOTE ADMIN FIX
+    # Create new user with AUTO-PROMOTE ADMIN FIX
     is_admin = (request.email == "delram540@gmail.com")
     new_user = User(
         email=request.email,
@@ -430,7 +433,7 @@ async def login_user(
     if not pwd_context.verify(request.password, user.hashed_password):
         raise HTTPException(status_code=401, detail="Invalid email or password")
     
-    # AUTO-PROMOTE ADMIN FIX ON LOGIN
+     # AUTO-PROMOTE ADMIN FIX ON LOGIN
     if user.email == "delram540@gmail.com":
         user.is_admin = True
         user.plan_type = "elite"
