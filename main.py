@@ -336,7 +336,7 @@ async def google_callback(request: Request, db: Session = Depends(get_db)):
                 is_admin=is_admin,
                 subscription_end_date=datetime.utcnow() + timedelta(days=365) if is_admin else None
             )
-                else:
+         else:
             # Ensure admin stays admin
             if email == "delram540@gmail.com":
                 db_user.is_admin = True
