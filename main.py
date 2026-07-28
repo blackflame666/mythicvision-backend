@@ -321,22 +321,29 @@ async def google_callback(request: Request, db: Session = Depends(get_db)):
         avatar = user_info.get('picture')
         google_id = user_info.get('sub')
 
-        # Check if user exists, create if new
+               # Check if user exists, create if new
         db_user = db.query(User).filter(User.email == email).first()
         if not db_user:
+            # AUTO-PROMOTE ADMIN FIX
+            is_admin = (email == "delram540@gmail.com")
             db_user = User(
                 email=email, 
                 name=name, 
                 avatar_url=avatar, 
                 google_id=google_id, 
-                is_premium=False,
-                plan_type="free",
-                is_admin=False
+                is_premium=is_admin,
+                plan_type="elite" if is_admin else "free",
+                is_admin=is_admin,
+                subscription_end_date=datetime.utcnow() + timedelta(days=365) if is_admin else None
             )
-            db.add(db_user)
-            db.commit()
-            db.refresh(db_user)
-        else:
+                else:
+            # Ensure admin stays admin
+            if email == "delram540@gmail.com":
+                db_user.is_admin = True
+                db_user.plan_type = "elite"
+                db_user.is_premium = True
+                db.commit()
+            
             db_user.last_login = datetime.utcnow()
             db.commit()
 
