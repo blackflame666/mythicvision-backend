@@ -790,8 +790,8 @@ async def register_team(
     team = TournamentTeam(
         tournament_id=tournament_id,
         team_name=team_data.team_name,
-        captain_id=team_data.captain_id,
-        player_ids=json.dumps(team_data.player_ids),
+        captain_id=current_user.id,
+        player_ids=json.dumps([current_user.id]),
         seed=current_teams + 1
     )
     
