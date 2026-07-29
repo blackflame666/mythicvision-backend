@@ -836,6 +836,24 @@ async def start_tournament(
     return {"message": "Tournament started successfully", "bracket_generated": True}
 
 @app.post("/api/tournaments/matches/{match_id}/result")
+@app.delete("/api/tournaments/{tournament_id}")
+async def delete_tournament(
+    tournament_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Delete a tournament (CREATOR ONLY)"""
+    tournament = db.query(Tournament).filter(Tournament.id == tournament_id).first()
+    if not tournament:
+        raise HTTPException(status_code=404, detail="Tournament not found")
+    
+    if tournament.creator_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Only the creator can delete this tournament")
+    
+    db.delete(tournament)
+    db.commit()
+    
+    return {"message": "Tournament deleted successfully"}
 async def submit_match_result(
     match_id: int,
     result_data: MatchResultRequest,
