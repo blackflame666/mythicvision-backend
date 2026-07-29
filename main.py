@@ -109,15 +109,21 @@ class TournamentMatch(Base):
 Base.metadata.create_all(bind=engine)
 
 # Database migration - add new columns to existing users table
+# Database migration - add new columns
 with engine.connect() as conn:
     try:
+        # Add columns to users table
         conn.execute(text("ALTER TABLE users ADD COLUMN is_admin BOOLEAN DEFAULT 0"))
         conn.execute(text("ALTER TABLE users ADD COLUMN subscription_end_date DATETIME"))
         conn.execute(text("ALTER TABLE users ADD COLUMN hashed_password VARCHAR"))
+        
+        # Add column to tournaments table
+        conn.execute(text("ALTER TABLE tournaments ADD COLUMN prize_pool VARCHAR"))
+        
         conn.commit()
-        print("Added admin, subscription, and password columns to users table")
+        print("Added migration columns successfully")
     except Exception as e:
-        print(f"Columns already exist or migration completed: {e}")
+        print(f"Migration info (columns may already exist): {e}")
         conn.rollback()
 
 # --- AUTO-PROMOTE ADMIN (Run once on deploy) ---
