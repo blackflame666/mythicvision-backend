@@ -848,7 +848,6 @@ async def start_tournament(
     
     return {"message": "Tournament started successfully", "bracket_generated": True}
 
-@app.post("/api/tournaments/matches/{match_id}/result")
 @app.delete("/api/tournaments/{tournament_id}")
 async def delete_tournament(
     tournament_id: int,
