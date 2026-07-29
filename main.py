@@ -720,7 +720,7 @@ async def create_tournament(
     if current_user.plan_type != "elite":
         raise HTTPException(status_code=403, detail="Tournament creation is an Elite-exclusive feature. Please upgrade to Elite.")
     
-        tournament = Tournament(
+    tournament = Tournament(
         name=tournament_data.name,
         creator_id=current_user.id,
         max_teams=tournament_data.max_teams,
