@@ -864,43 +864,7 @@ async def delete_tournament(
     db.commit()
     
     return {"message": "Tournament deleted successfully"}
-async def submit_match_result(
-    match_id: int,
-    result_data: MatchResultRequest,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """Submit match result and advance winner"""
-    match = db.query(TournamentMatch).filter(TournamentMatch.id == match_id).first()
-    if not match:
-        raise HTTPException(status_code=404, detail="Match not found")
-    
-    # Update match result
-    match.winner_id = result_data.winner_id
-    match.team1_score = result_data.team1_score
-    match.team2_score = result_data.team2_score
-    match.status = "completed"
-    
-    # Advance winner to next round
-    if match.round_number < 3:  # Not the final
-        next_round_matches = db.query(TournamentMatch).filter(
-            TournamentMatch.tournament_id == match.tournament_id,
-            TournamentMatch.round_number == match.round_number + 1
-        ).all()
-        
-        # Find the next match for this winner
-        for next_match in next_round_matches:
-            if not next_match.team1_id:
-                next_match.team1_id = result_data.winner_id
-                break
-            elif not next_match.team2_id:
-                next_match.team2_id = result_data.winner_id
-                break
-    
-    db.commit()
-    
-    return {"message": "Match result submitted successfully"}
-
+ 
 # --- SUBSCRIPTION UPGRADE ---
 @app.post("/api/subscription/upgrade")
 async def upgrade_subscription(
@@ -1025,3 +989,37 @@ async def health_check():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run(app, host="0.0.0.0", port=port)
+
+@app.post("/api/tournaments/matches/{match_id}/result")
+async def submit_match_result(
+    match_id: int,
+    result_data: MatchResultRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Submit match result and advance winner"""
+    match = db.query(TournamentMatch).filter(TournamentMatch.id == match_id).first()
+    if not match:
+        raise HTTPException(status_code=404, detail="Match not found")
+    
+    match.winner_id = result_data.winner_id
+    match.team1_score = result_data.team1_score
+    match.team2_score = result_data.team2_score
+    match.status = "completed"
+    
+    if match.round_number < 3:
+        next_round_matches = db.query(TournamentMatch).filter(
+            TournamentMatch.tournament_id == match.tournament_id,
+            TournamentMatch.round_number == match.round_number + 1
+        ).all()
+        
+        for next_match in next_round_matches:
+            if not next_match.team1_id:
+                next_match.team1_id = result_data.winner_id
+                break
+            elif not next_match.team2_id:
+                next_match.team2_id = result_data.winner_id
+                break
+    
+    db.commit()
+    return {"message": "Match result submitted successfully"}
