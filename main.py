@@ -738,7 +738,8 @@ async def get_user_tournaments(
     db: Session = Depends(get_db)
 ):
     """Get all tournaments created by user"""
-    tournaments = db.query(Tournament).filter(Tournament.creator_id == current_user.id).all()
+    from sqlalchemy.orm import joinedload
+    tournaments = db.query(Tournament).options(joinedload(Tournament.teams)).filter(Tournament.creator_id == current_user.id).all()
     return {"tournaments": tournaments}
 
 @app.get("/api/tournaments/{tournament_id}")
