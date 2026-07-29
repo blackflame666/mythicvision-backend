@@ -62,12 +62,13 @@ class Tournament(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, nullable=False)
     creator_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    max_teams = Column(Integer, default=8)  # 4, 8, 16, 32
-    status = Column(String, default="pending")  # pending, active, completed
+    max_teams = Column(Integer, default=8)
+    status = Column(String, default="pending")
     created_at = Column(DateTime, default=datetime.utcnow)
     start_date = Column(DateTime)
-    game_mode = Column(String)  # e.g., "5v5", "3v3"
+    game_mode = Column(String)
     description = Column(String, nullable=True)
+    prize_pool = Column(String, nullable=True)  # <--- Make sure this exists!
     
     # Relationships
     creator = relationship("User", back_populates="tournaments")
@@ -197,6 +198,7 @@ class TournamentCreateRequest(BaseModel):
     game_mode: str
     start_date: datetime
     description: Optional[str] = None
+    prize_pool: Optional[str] = None  # <--- Make sure this line exists
 
 class TeamRegisterRequest(BaseModel):
     team_name: str
@@ -712,13 +714,14 @@ async def create_tournament(
     if current_user.plan_type != "elite":
         raise HTTPException(status_code=403, detail="Tournament creation is an Elite-exclusive feature. Please upgrade to Elite.")
     
-    tournament = Tournament(
+        tournament = Tournament(
         name=tournament_data.name,
         creator_id=current_user.id,
         max_teams=tournament_data.max_teams,
         game_mode=tournament_data.game_mode,
         start_date=tournament_data.start_date,
         description=tournament_data.description,
+        prize_pool=tournament_data.prize_pool,  # <--- THIS LINE MUST BE HERE
         status="pending"
     )
     
